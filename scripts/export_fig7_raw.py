@@ -43,8 +43,8 @@ for files, start, out_path, label in SOURCES:
     for f in files:
         print(f"  reading {f.name} …")
         df = pd.read_csv(f, skiprows=[1], low_memory=False)
-        df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="mixed", utc=True)
-        df = df[df["Timestamp"] >= start]
+        ts = pd.to_datetime(df["Timestamp"], format="mixed", utc=True)
+        df = df[ts >= start]
         parts.append(df)
 
     combined = pd.concat(parts, ignore_index=True).sort_values("Timestamp").reset_index(drop=True)

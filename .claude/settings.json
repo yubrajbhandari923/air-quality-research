@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python manage.py load_real_data --dry-run)"
+      "Bash(python manage.py load_real_data --dry-run)",
+      "Bash(python3 /Users/yubraj/Code/air-quality-research/scripts/export_fig7_raw.py)"
     ]
   }
 }
