@@ -2,6 +2,7 @@ services:
   - type: web
     name: nepal-aq-dashboard
     runtime: python
+    plan: free
 
     buildCommand: |
       cd Dashboard
