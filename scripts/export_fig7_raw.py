@@ -26,13 +26,13 @@ SOURCES = [
     (
         sorted(DATA.glob("81432434001-20*.csv")),
         OUT_START,
-        ROOT / "Data" / "fig7_outdoor.csv",
+        ROOT / "Data" / "81432434001_fig7.csv",
         "Outdoor 81432434001",
     ),
     (
         sorted((DATA / "81442326017-81442406076-81442410021").glob("81442406076-20*.csv")),
         IN_START,
-        ROOT / "Data" / "fig7_indoor.csv",
+        ROOT / "Data" / "81442406076_fig7.csv",
         "Indoor 81442406076",
     ),
 ]

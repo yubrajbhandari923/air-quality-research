@@ -23,8 +23,8 @@ from apps.ingestion.converters.csv_converter import BelauriCSVConverter
 # Repo root is one level above BASE_DIR (Dashboard/)
 REPO_ROOT = Path(settings.BASE_DIR).parent
 DATA_FILES = [
-    REPO_ROOT / "Data" / "fig7_outdoor.csv",
-    REPO_ROOT / "Data" / "fig7_indoor.csv",
+    REPO_ROOT / "Data" / "81432434001_fig7.csv",
+    REPO_ROOT / "Data" / "81442406076_fig7.csv",
 ]
 
 
