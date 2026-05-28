@@ -1,11 +1,11 @@
 """
 Management command: load_real_data
 
-Ingests Data/fig7_raw.csv — the filtered minute-by-minute dataset for both
-Belauri sensors covering the Figure 7 analysis window.
+Ingests the two filtered figure-7 CSVs (outdoor + indoor Belauri sensors).
 
-Safe to run on every deploy — if the file is already in IngestionLog with
-status SUCCESS or PARTIAL it is skipped.
+Safe to run on every deploy — files already in IngestionLog with status
+SUCCESS or PARTIAL are skipped.  Set env var RESET_DATA=true on Render to
+clear all data first and force a fresh reload.
 
 Usage:
     python manage.py load_real_data            # ingest (skip if already done)
@@ -22,13 +22,14 @@ from apps.ingestion.converters.csv_converter import BelauriCSVConverter
 
 # Repo root is one level above BASE_DIR (Dashboard/)
 REPO_ROOT = Path(settings.BASE_DIR).parent
-DATA_FILE = REPO_ROOT / "Data" / "fig7_raw.csv"
+DATA_FILES = [
+    REPO_ROOT / "Data" / "fig7_outdoor.csv",
+    REPO_ROOT / "Data" / "fig7_indoor.csv",
+]
 
 
 def _collect_files() -> list[Path]:
-    if DATA_FILE.exists():
-        return [DATA_FILE]
-    return []
+    return [f for f in DATA_FILES if f.exists()]
 
 
 def _already_ingested(path: Path) -> bool:
@@ -41,7 +42,7 @@ def _already_ingested(path: Path) -> bool:
 
 
 class Command(BaseCommand):
-    help = "Idempotently ingest all Belauri CSV files (skips already-loaded files)."
+    help = "Idempotently ingest fig7 CSVs (skips already-loaded files)."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -61,9 +62,10 @@ class Command(BaseCommand):
 
         files = _collect_files()
         if not files:
+            missing = [str(f) for f in DATA_FILES if not f.exists()]
             self.stderr.write(self.style.ERROR(
-                f"File not found: {DATA_FILE}\n"
-                "Run: python scripts/export_fig7_raw.py   (from the repo root)"
+                f"Data file(s) not found: {', '.join(missing)}\n"
+                "Run: python3 scripts/export_fig7_raw.py   (from the repo root)"
             ))
             return
 
