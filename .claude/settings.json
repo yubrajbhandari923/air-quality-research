@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python manage.py load_real_data --dry-run)"
+    ]
+  }
+}

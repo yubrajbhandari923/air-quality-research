@@ -1,17 +1,16 @@
 """
 Management command: load_real_data
 
-Ingests all Belauri CSV files that have not yet been successfully loaded.
-Safe to run on every deploy — files already in IngestionLog with status SUCCESS
-or PARTIAL are skipped.
+Ingests Data/fig7_raw.csv — the filtered minute-by-minute dataset for both
+Belauri sensors covering the Figure 7 analysis window.
 
-Data directory is resolved relative to the repo root (one level above BASE_DIR),
-so it works both locally and on Render (where the full repo is cloned).
+Safe to run on every deploy — if the file is already in IngestionLog with
+status SUCCESS or PARTIAL it is skipped.
 
 Usage:
-    python manage.py load_real_data            # ingest new files
+    python manage.py load_real_data            # ingest (skip if already done)
     python manage.py load_real_data --dry-run  # show what would run, no DB writes
-    python manage.py load_real_data --force    # re-ingest even already-loaded files
+    python manage.py load_real_data --force    # re-ingest even if already loaded
 """
 from pathlib import Path
 
@@ -23,22 +22,13 @@ from apps.ingestion.converters.csv_converter import BelauriCSVConverter
 
 # Repo root is one level above BASE_DIR (Dashboard/)
 REPO_ROOT = Path(settings.BASE_DIR).parent
-DATA_DIR  = REPO_ROOT / "Data" / "Belauri"
-
-# Glob patterns that find all Belauri H1/H2 export CSVs, including the
-# sensor-group subdirectory.  Telemetry files are excluded — they duplicate
-# the H1/H2 data and have a different timestamp format.
-CSV_GLOBS = [
-    DATA_DIR.glob("81432434001-20*.csv"),
-    (DATA_DIR / "81442326017-81442406076-81442410021").glob("8144*-20*.csv"),
-]
+DATA_FILE = REPO_ROOT / "Data" / "fig7_raw.csv"
 
 
 def _collect_files() -> list[Path]:
-    files = []
-    for glob in CSV_GLOBS:
-        files.extend(sorted(glob))
-    return files
+    if DATA_FILE.exists():
+        return [DATA_FILE]
+    return []
 
 
 def _already_ingested(path: Path) -> bool:
@@ -69,19 +59,15 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
         force   = options["force"]
 
-        if not DATA_DIR.exists():
+        files = _collect_files()
+        if not files:
             self.stderr.write(self.style.ERROR(
-                f"Data directory not found: {DATA_DIR}\n"
-                "Make sure the repo was cloned with the Data/ directory present."
+                f"File not found: {DATA_FILE}\n"
+                "Run: python scripts/export_fig7_raw.py   (from the repo root)"
             ))
             return
 
-        files = _collect_files()
-        if not files:
-            self.stdout.write(self.style.WARNING("No CSV files found."))
-            return
-
-        self.stdout.write(f"Found {len(files)} CSV file(s) in {DATA_DIR}")
+        self.stdout.write(f"Found {len(files)} file(s) to process")
 
         converter = BelauriCSVConverter()
         total_saved = total_dupes = total_errors = 0
