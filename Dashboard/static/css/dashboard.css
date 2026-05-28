@@ -1,0 +1,69 @@
+/* Nepal AQ Dashboard — custom CSS
+   Most styling is handled by Tailwind CDN classes in templates.
+   This file adds publication-quality chart defaults and small overrides.
+*/
+
+/* ── Leaflet map ─────────────────────────────────────────────────────────── */
+.leaflet-container {
+  font-family: inherit;
+  font-size: 0.75rem;
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+  font-size: 0.78rem;
+}
+
+/* ── Chart.js canvas ─────────────────────────────────────────────────────── */
+canvas {
+  max-width: 100%;
+}
+
+/* ── Quality flag badges ─────────────────────────────────────────────────── */
+.flag-good       { background: #dcfce7; color: #166534; }
+.flag-suspect    { background: #fef9c3; color: #854d0e; }
+.flag-bad        { background: #fee2e2; color: #991b1b; }
+.flag-missing    { background: #f3f4f6; color: #6b7280; }
+.flag-unvalidated{ background: #dbeafe; color: #1e40af; }
+
+/* ── Sidebar mobile overlay ──────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  #sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    z-index: 50;
+    flex-direction: column;
+  }
+  #sidebar.hidden {
+    display: none !important;
+  }
+}
+
+/* ── Print styles (publication figures) ─────────────────────────────────── */
+@media print {
+  #sidebar, header, footer { display: none !important; }
+  main { padding: 0; }
+  canvas { max-width: 100%; height: auto !important; }
+  .bg-gray-50 { background: white; }
+  .shadow-sm { box-shadow: none; }
+  .border { border-color: #e5e7eb; }
+}
+
+/* ── Sensor status pulse animation ──────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+/* ── WHO guideline reference lines in charts ─────────────────────────────── */
+/* Applied via JS dataset styling; here for documentation only */
+
+/* ── Scrollbar styling (webkit) ──────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #f9fafb; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #9ca3af; }

@@ -1,0 +1,114 @@
+{% load static %}
+<nav class="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm" x-data="{ open: false }">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6">
+    <div class="flex items-center justify-between h-16">
+
+      {# ── Wordmark ──────────────────────────────────────────────────── #}
+      <a href="{% url 'observatory:home' %}" class="flex items-center gap-2.5 shrink-0">
+        <div class="flex items-center justify-center w-8 h-8 rounded-full bg-nao-red">
+          {# Minimal air-quality icon: concentric arcs #}
+          <svg class="w-5 h-5 text-white" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 13 C4 9 8 5 10 5 C12 5 16 9 16 13" stroke-linecap="round"/>
+            <path d="M6.5 13 C6.5 10 8.5 8 10 8 C11.5 8 13.5 10 13.5 13" stroke-linecap="round"/>
+            <circle cx="10" cy="13" r="1.2" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <div class="leading-tight">
+          <span class="block text-sm font-bold text-slate-900 tracking-tight">Nepal Air Observatory</span>
+          <span class="block text-[10px] text-slate-400 font-normal -mt-0.5 hidden sm:block">Open air-quality data</span>
+        </div>
+      </a>
+
+      {# ── Desktop nav links ─────────────────────────────────────────── #}
+      <div class="hidden lg:flex items-center space-x-1">
+        {% with request.resolver_match.url_name as url_name %}
+        <a href="{% url 'observatory:home' %}"
+           class="nav-link {% if url_name == 'home' %}nav-link-active{% endif %}">Overview</a>
+        <a href="{% url 'observatory:map' %}"
+           class="nav-link {% if url_name == 'map' %}nav-link-active{% endif %}">Map</a>
+        <a href="{% url 'observatory:sensor_list' %}"
+           class="nav-link {% if url_name == 'sensor_list' %}nav-link-active{% endif %}">Sensors</a>
+        <a href="{% url 'observatory:analysis' %}"
+           class="nav-link {% if url_name == 'analysis' %}nav-link-active{% endif %}">Analysis</a>
+        <a href="{% url 'observatory:data_access' %}"
+           class="nav-link {% if url_name == 'data_access' %}nav-link-active{% endif %}">Data Access</a>
+        <a href="{% url 'observatory:methods' %}"
+           class="nav-link {% if url_name == 'methods' %}nav-link-active{% endif %}">Methods</a>
+        <a href="{% url 'observatory:about' %}"
+           class="nav-link {% if url_name == 'about' %}nav-link-active{% endif %}">About</a>
+        {% endwith %}
+      </div>
+
+      {# ── Right side: status pill + user ───────────────────────────── #}
+      <div class="flex items-center gap-3">
+        {# Live status #}
+        <div class="hidden sm:flex items-center gap-1.5 text-xs text-slate-500 bg-green-50 border border-green-200 rounded-full px-2.5 py-1">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+          <span>Live</span>
+        </div>
+
+        {# User / Sign in #}
+        {% if user.is_authenticated %}
+          <div class="flex items-center gap-2">
+            {% if user.role == 'ADMIN' or user.role == 'MAINTAINER' or user.role == 'RESEARCHER' %}
+              <a href="{% url 'portal:index' %}"
+                 class="hidden sm:inline-flex items-center gap-1 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-md px-2.5 py-1.5 transition-colors">
+                Portal
+              </a>
+            {% endif %}
+            <a href="{% url 'users:profile' %}" class="flex items-center gap-1.5">
+              <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-nao-blue text-white text-xs font-bold">
+                {{ user.username|first|upper }}
+              </span>
+            </a>
+            <form method="post" action="{% url 'users:logout' %}" class="inline">
+              {% csrf_token %}
+              <button type="submit" class="text-xs text-slate-400 hover:text-slate-700 transition-colors">Sign out</button>
+            </form>
+          </div>
+        {% else %}
+          <a href="{% url 'users:login' %}"
+             class="text-sm font-medium text-white bg-nao-red hover:bg-red-800 rounded-md px-3.5 py-1.5 transition-colors">
+            Sign in
+          </a>
+        {% endif %}
+
+        {# Mobile hamburger #}
+        <button id="mob-menu-btn" class="lg:hidden p-1.5 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path id="mob-icon-open"  stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            <path id="mob-icon-close" stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" class="hidden" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    {# ── Mobile menu ─────────────────────────────────────────────────── #}
+    <div id="mob-menu" class="hidden lg:hidden border-t border-slate-100 py-2 pb-3 space-y-0.5">
+      <a href="{% url 'observatory:home' %}"        class="mob-link">Overview</a>
+      <a href="{% url 'observatory:map' %}"         class="mob-link">Map</a>
+      <a href="{% url 'observatory:sensor_list' %}" class="mob-link">Sensors</a>
+      <a href="{% url 'observatory:analysis' %}"    class="mob-link">Analysis</a>
+      <a href="{% url 'observatory:data_access' %}" class="mob-link">Data Access</a>
+      <a href="{% url 'observatory:methods' %}"     class="mob-link">Methods</a>
+      <a href="{% url 'observatory:about' %}"       class="mob-link">About</a>
+      {% if not user.is_authenticated %}
+        <div class="pt-2 px-3">
+          <a href="{% url 'users:login' %}" class="block w-full text-center text-sm font-medium text-white bg-nao-red hover:bg-red-800 rounded-md px-4 py-2 transition-colors">Sign in</a>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</nav>
+
+<script>
+  const btn  = document.getElementById('mob-menu-btn');
+  const menu = document.getElementById('mob-menu');
+  const iconOpen  = document.getElementById('mob-icon-open');
+  const iconClose = document.getElementById('mob-icon-close');
+  btn.addEventListener('click', () => {
+    const hidden = menu.classList.toggle('hidden');
+    iconOpen.classList.toggle('hidden',  !hidden);
+    iconClose.classList.toggle('hidden', hidden);
+  });
+</script>

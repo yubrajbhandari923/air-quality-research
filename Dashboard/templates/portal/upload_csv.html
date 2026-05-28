@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Upload CSV — Portal{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 sm:px-6 py-12">
+  <h1 class="text-2xl font-bold text-slate-900 mb-2">Upload CSV</h1>
+  <p class="text-sm text-slate-500 mb-8">Upload a sensor CSV file for ingestion. The system will run the appropriate converter and log the result.</p>
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <p class="text-sm text-slate-600 mb-4">CSV upload UI coming soon. Use the management command for now:</p>
+    <code class="block text-xs bg-slate-900 text-green-400 rounded-lg p-4">uv run python manage.py run_ingestion --source belauri_csv</code>
+    <div class="mt-4"><a href="{% url 'portal:index' %}" class="btn-secondary text-sm">← Back to portal</a></div>
+  </div>
+</div>
+{% endblock %}

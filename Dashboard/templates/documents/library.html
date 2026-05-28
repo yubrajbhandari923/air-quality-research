@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Document Library — Nepal AQ Dashboard{% endblock %}
+{% block page_title %}Document Library{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <!-- Category filter -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-5 py-4">
+    <div class="flex flex-wrap gap-2">
+      <a href="?" class="px-3 py-1 text-xs font-medium rounded-full border
+        {% if not selected_category %}bg-blue-800 text-white border-blue-800{% else %}bg-white text-gray-600 border-gray-200 hover:border-gray-300{% endif %}">
+        All
+      </a>
+      {% for cat in categories %}
+      <a href="?category={{ cat.slug }}" class="px-3 py-1 text-xs font-medium rounded-full border
+        {% if selected_category == cat.slug %}bg-blue-800 text-white border-blue-800{% else %}bg-white text-gray-600 border-gray-200 hover:border-gray-300{% endif %}">
+        {{ cat.name }}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Document list -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    {% for doc in documents %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex flex-col">
+      <div class="flex-1">
+        {% if doc.is_featured %}
+          <span class="text-xs font-bold text-yellow-600 uppercase tracking-wide">Featured</span>
+        {% endif %}
+        <h3 class="text-sm font-semibold text-gray-800 mt-1">{{ doc.title }}</h3>
+        {% if doc.category %}
+          <span class="text-xs text-blue-600">{{ doc.category.name }}</span>
+        {% endif %}
+        {% if doc.description %}
+          <p class="text-xs text-gray-500 mt-2">{{ doc.description|truncatechars:120 }}</p>
+        {% endif %}
+      </div>
+      <div class="mt-4 flex items-center justify-between">
+        <span class="text-xs text-gray-400">
+          {% if doc.access_level == 'PUBLIC' %}
+            <span class="text-green-600">Public</span>
+          {% elif doc.access_level == 'RESEARCHER' %}
+            <span class="text-blue-600">Researcher only</span>
+          {% else %}
+            <span class="text-orange-600">Restricted</span>
+          {% endif %}
+        </span>
+        {% if doc.file %}
+          <a href="{{ doc.file.url }}" download class="text-xs text-blue-700 hover:text-blue-900 font-medium">
+            Download →
+          </a>
+        {% elif doc.external_url %}
+          <a href="{{ doc.external_url }}" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-700 hover:text-blue-900 font-medium">
+            Open →
+          </a>
+        {% endif %}
+      </div>
+    </div>
+    {% empty %}
+    <div class="col-span-3 text-center py-12 text-gray-400 text-sm">
+      No documents available yet.
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

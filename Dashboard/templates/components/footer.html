@@ -1,0 +1,95 @@
+<footer class="bg-slate-900 text-slate-300 mt-24">
+
+  {# ── Disclaimer banner ─────────────────────────────────────────────── #}
+  <div class="bg-amber-50 border-t border-amber-200">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-start gap-3 text-xs text-amber-800">
+      <svg class="w-4 h-4 mt-0.5 shrink-0 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" />
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15.75h.007v.008H12v-.008z" />
+      </svg>
+      <span>
+        <strong>Data disclaimer:</strong> These data are collected from research-grade low-cost sensors.
+        They are intended for scientific, educational, and public-interest use, and should not be treated
+        as official regulatory measurements without independent validation.
+      </span>
+    </div>
+  </div>
+
+  {# ── Main footer content ──────────────────────────────────────────── #}
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10">
+
+    {# Column 1: Project identity #}
+    <div class="lg:col-span-2">
+      <div class="flex items-center gap-2 mb-3">
+        <div class="flex items-center justify-center w-7 h-7 rounded-full bg-nao-red">
+          <svg class="w-4 h-4 text-white" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M4 13 C4 9 8 5 10 5 C12 5 16 9 16 13" stroke-linecap="round"/>
+            <path d="M6.5 13 C6.5 10 8.5 8 10 8 C11.5 8 13.5 10 13.5 13" stroke-linecap="round"/>
+            <circle cx="10" cy="13" r="1.2" fill="currentColor" stroke="none"/>
+          </svg>
+        </div>
+        <span class="text-white font-semibold">Nepal Air Observatory</span>
+      </div>
+      <p class="text-sm text-slate-400 leading-relaxed max-w-sm">
+        Open data and analysis on PM₂.₅ exposure, monitoring gaps, and sensor reliability in Nepal.
+        A research initiative combining low-cost sensor networks with rigorous data science.
+      </p>
+      <div class="mt-4 flex items-center gap-3">
+        <a href="https://github.com" target="_blank" rel="noopener"
+           class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+          </svg>
+          GitHub
+        </a>
+        <span class="text-slate-600">·</span>
+        <a href="{% url 'observatory:methods' %}" class="text-xs text-slate-400 hover:text-white transition-colors">Methodology</a>
+        <span class="text-slate-600">·</span>
+        <a href="{% url 'observatory:data_access' %}" class="text-xs text-slate-400 hover:text-white transition-colors">Data Policy</a>
+      </div>
+    </div>
+
+    {# Column 2: Quick links #}
+    <div>
+      <h4 class="text-xs font-semibold text-slate-200 uppercase tracking-widest mb-3">Explore</h4>
+      <ul class="space-y-2 text-sm">
+        <li><a href="{% url 'observatory:home' %}"        class="text-slate-400 hover:text-white transition-colors">Overview</a></li>
+        <li><a href="{% url 'observatory:map' %}"         class="text-slate-400 hover:text-white transition-colors">Map</a></li>
+        <li><a href="{% url 'observatory:sensor_list' %}" class="text-slate-400 hover:text-white transition-colors">Sensors</a></li>
+        <li><a href="{% url 'observatory:analysis' %}"    class="text-slate-400 hover:text-white transition-colors">Analysis</a></li>
+        <li><a href="{% url 'observatory:data_access' %}" class="text-slate-400 hover:text-white transition-colors">Data Access</a></li>
+        <li><a href="{% url 'observatory:methods' %}"     class="text-slate-400 hover:text-white transition-colors">Methods</a></li>
+        <li><a href="{% url 'observatory:about' %}"       class="text-slate-400 hover:text-white transition-colors">About</a></li>
+      </ul>
+    </div>
+
+    {# Column 3: Funding & partners #}
+    <div>
+      <h4 class="text-xs font-semibold text-slate-200 uppercase tracking-widest mb-3">Acknowledgements</h4>
+      <p class="text-xs text-slate-400 leading-relaxed">
+        Supported by
+        <a href="https://bassconnections.duke.edu" target="_blank" rel="noopener"
+           class="text-slate-300 hover:text-white underline underline-offset-2 transition-colors">Duke Bass Connections</a>
+        through the <em>Integrated Natural Hazard Monitoring for the Kathmandu Valley</em> project, and by the
+        <a href="https://library.duke.edu" target="_blank" rel="noopener"
+           class="text-slate-300 hover:text-white underline underline-offset-2 transition-colors">Duke University Libraries</a>
+        LIFE Undergraduate Summer Research Grant.
+      </p>
+      <p class="mt-3 text-xs text-slate-500">
+        WHO PM₂.₅ 24h guideline: <strong class="text-slate-400">15 µg/m³</strong><br/>
+        Nepal NAAQS 24h: <strong class="text-slate-400">40 µg/m³</strong><br/>
+        Timezone: <strong class="text-slate-400">Asia/Kathmandu (UTC+5:45)</strong>
+      </p>
+    </div>
+
+  </div>
+
+  {# ── Bottom bar #}
+  <div class="border-t border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+      <span>&copy; {% now "Y" %} Nepal Air Observatory. Data shared under <a href="#" class="underline underline-offset-1 hover:text-slate-300 transition-colors">CC BY 4.0</a>.</span>
+      <span>Contact: <a href="mailto:yubraj.bhandari@duke.edu" class="underline underline-offset-1 hover:text-slate-300 transition-colors">yubraj.bhandari@duke.edu</a></span>
+    </div>
+  </div>
+
+</footer>

@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ sensor.display_name }} — Nepal AQ Dashboard{% endblock %}
+{% block page_title %}{{ sensor.display_name }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Header row -->
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div class="flex items-center space-x-3">
+      <span class="inline-block w-3.5 h-3.5 rounded-full {{ sensor.status_css_class }}"></span>
+      <div>
+        <div class="text-sm text-gray-500">
+          {{ sensor.site.name }} &bull; {{ sensor.site.district }}
+          &bull; {% if sensor.is_indoor %}
+            <span class="bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded text-xs font-medium">Indoor</span>
+          {% else %}
+            <span class="bg-teal-100 text-teal-700 px-1.5 py-0.5 rounded text-xs font-medium">Outdoor</span>
+          {% endif %}
+        </div>
+        <div class="text-xs text-gray-400 mt-0.5">Serial: {{ sensor.serial_number }} &bull; Model: {{ sensor.model }}</div>
+      </div>
+    </div>
+    <div class="flex space-x-2">
+      {% if companion %}
+        <a href="{{ companion.get_absolute_url }}"
+           class="text-xs px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-full border border-indigo-200 hover:bg-indigo-100">
+          Compare with {{ companion.display_name }}
+        </a>
+      {% endif %}
+      <a href="{% url 'dashboard:indoor_outdoor' sensor.site.pk %}"
+         class="text-xs px-3 py-1.5 bg-gray-100 text-gray-700 rounded-full border border-gray-200 hover:bg-gray-200">
+        I/O Comparison
+      </a>
+    </div>
+  </div>
+
+  <!-- 24h stat cards -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <p class="text-xs font-semibold text-gray-400 uppercase">PM2.5 (24h avg)</p>
+      <p class="text-3xl font-bold {{ pm25_colour }} mt-1">{{ pm25_avg_24h|default:"—" }}</p>
+      <p class="text-xs text-gray-400">µg/m³</p>
+      {% if exceeds_nepal %}
+        <span class="mt-1 inline-block px-1.5 py-0.5 text-xs font-bold bg-red-100 text-red-700 rounded">Exceeds Nepal NAAQS</span>
+      {% elif exceeds_who %}
+        <span class="mt-1 inline-block px-1.5 py-0.5 text-xs font-bold bg-yellow-100 text-yellow-700 rounded">Exceeds WHO</span>
+      {% else %}
+        <span class="mt-1 inline-block px-1.5 py-0.5 text-xs font-bold bg-green-100 text-green-700 rounded">Below WHO</span>
+      {% endif %}
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <p class="text-xs font-semibold text-gray-400 uppercase">24h Max</p>
+      <p class="text-3xl font-bold text-gray-700 mt-1">{{ stats_24h.max_val|floatformat:0|default:"—" }}</p>
+      <p class="text-xs text-gray-400">µg/m³</p>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <p class="text-xs font-semibold text-gray-400 uppercase">24h Min</p>
+      <p class="text-3xl font-bold text-gray-700 mt-1">{{ stats_24h.min_val|floatformat:0|default:"—" }}</p>
+      <p class="text-xs text-gray-400">µg/m³</p>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      <p class="text-xs font-semibold text-gray-400 uppercase">Readings (24h)</p>
+      <p class="text-3xl font-bold text-gray-700 mt-1">{{ stats_24h.count|default:"—" }}</p>
+      <p class="text-xs text-gray-400">data points</p>
+    </div>
+  </div>
+
+  <!-- Time-series chart -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-sm font-semibold text-gray-700">PM2.5 Time Series</h2>
+      <div class="flex space-x-2">
+        <select id="pollutant-select" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600">
+          <option value="PM25">PM2.5</option>
+          <option value="PM10">PM10</option>
+          <option value="PM1">PM1</option>
+          <option value="TEMP">Temperature</option>
+          <option value="RH">Humidity</option>
+          {% if sensor.is_indoor %}
+          <option value="CO2">CO2</option>
+          <option value="TVOC">Total VOC</option>
+          {% endif %}
+        </select>
+        <select id="time-range-select" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600">
+          <option value="24h">Last 24h</option>
+          <option value="7d" selected>Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+        </select>
+      </div>
+    </div>
+    <!-- WHO/Nepal guideline lines will be drawn by JS -->
+    <canvas id="timeseries-chart" height="90"></canvas>
+    <p class="text-xs text-gray-400 mt-2">
+      Red dashed = Nepal NAAQS ({{ nepal_naaqs_24h }} µg/m³) &nbsp;|&nbsp;
+      Blue dashed = WHO 24h ({{ who_24h }} µg/m³)
+    </p>
+  </div>
+
+  <!-- Completeness chart -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-4">Data Completeness (30 days)</h2>
+    <canvas id="completeness-chart" height="50"></canvas>
+    <p class="text-xs text-gray-400 mt-2">
+      Bars show % of expected 15-minute readings received each day.
+      Green ≥ 80%, Yellow 50–80%, Red &lt; 50%.
+    </p>
+  </div>
+
+  <!-- Metadata + Maintenance -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- Sensor metadata -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3">Sensor Information</h2>
+      <dl class="space-y-2 text-sm">
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Manufacturer</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.manufacturer }}</dd>
+        </div>
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Model</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.model }}</dd>
+        </div>
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Power</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.get_power_type_display }}</dd>
+        </div>
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Connectivity</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.get_connectivity_type_display }}</dd>
+        </div>
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Location</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.site.latitude|floatformat:4 }}°N, {{ sensor.site.longitude|floatformat:4 }}°E</dd>
+        </div>
+        {% if sensor.site.elevation_m %}
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Elevation</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.site.elevation_m }} m</dd>
+        </div>
+        {% endif %}
+        {% if sensor.installed_at %}
+        <div class="flex justify-between">
+          <dt class="text-gray-400">Installed</dt>
+          <dd class="font-medium text-gray-700">{{ sensor.installed_at|date:"M d, Y" }}</dd>
+        </div>
+        {% endif %}
+      </dl>
+      {% if sensor.calibration_field_notes %}
+      <div class="mt-3 pt-3 border-t border-gray-100">
+        <p class="text-xs font-semibold text-gray-400 mb-1">Calibration Notes</p>
+        <p class="text-xs text-gray-500">{{ sensor.calibration_field_notes }}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Maintenance log -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3">Maintenance Log</h2>
+      {% if maintenance_logs %}
+        <div class="space-y-3">
+          {% for log in maintenance_logs %}
+          <div class="flex space-x-3 text-sm">
+            <div class="flex-shrink-0 w-2.5 h-2.5 mt-1 rounded-full
+              {% if log.event_type == 'CALIBRATION' %}bg-blue-400
+              {% elif log.event_type == 'REPAIR' %}bg-red-400
+              {% elif log.event_type == 'INSPECTION' %}bg-green-400
+              {% else %}bg-gray-400{% endif %}">
+            </div>
+            <div>
+              <div class="font-medium text-gray-700">{{ log.get_event_type_display }} — {{ log.event_date }}</div>
+              <div class="text-xs text-gray-500">{{ log.description|truncatechars:120 }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="text-sm text-gray-400">No maintenance logs recorded.</p>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const SENSOR_ID = {{ sensor.pk }};
+const WHO_24H = {{ who_24h }};
+const NEPAL_24H = {{ nepal_naaqs_24h }};
+
+// Helper to get ISO datetime N days ago
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString();
+}
+
+let tsChart = null;
+
+async function loadTimeSeries(pollutant, timeRange) {
+  const rangeMap = {'24h': 1, '7d': 7, '30d': 30};
+  const days = rangeMap[timeRange] || 7;
+  const start = daysAgo(days);
+
+  const resp = await fetch(`/api/v1/charts/sensor/${SENSOR_ID}/timeseries/?pollutant=${pollutant}&start=${start}`);
+  const data = await resp.json();
+
+  const labels = data.points.map(p => new Date(p.ts));
+  const values = data.points.map(p => p.value);
+
+  const ctx = document.getElementById('timeseries-chart').getContext('2d');
+  if (tsChart) tsChart.destroy();
+
+  const isPM = ['PM25', 'PM10', 'PM1', 'PM4'].includes(pollutant);
+
+  tsChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: `${pollutant}`,
+          data: values,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.08)',
+          borderWidth: 1.5,
+          pointRadius: values.length > 200 ? 0 : 2,
+          fill: true,
+          tension: 0.2,
+        },
+        ...(isPM && pollutant === 'PM25' ? [
+          {
+            label: 'Nepal NAAQS (40)',
+            data: labels.map(() => NEPAL_24H),
+            borderColor: '#ef4444',
+            borderDash: [6, 4],
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
+          },
+          {
+            label: 'WHO 24h (15)',
+            data: labels.map(() => WHO_24H),
+            borderColor: '#6366f1',
+            borderDash: [6, 4],
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false,
+          },
+        ] : []),
+      ],
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { boxWidth: 14, font: { size: 11 } } },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'MMM d, HH:mm' },
+          ticks: { font: { size: 10 } },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { font: { size: 10 } },
+          title: {
+            display: true,
+            text: pollutant === 'TEMP' ? '°C' : pollutant === 'RH' ? '%' :
+                  pollutant === 'CO2' ? 'ppm' : 'µg/m³',
+            font: { size: 10 },
+          },
+        },
+      },
+    },
+  });
+}
+
+async function loadCompleteness() {
+  const resp = await fetch(`/api/v1/charts/sensor/${SENSOR_ID}/completeness/`);
+  const data = await resp.json();
+
+  const ctx = document.getElementById('completeness-chart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.data.map(d => d.date),
+      datasets: [{
+        label: 'Completeness %',
+        data: data.data.map(d => d.completeness_pct),
+        backgroundColor: data.data.map(d =>
+          d.completeness_pct >= 80 ? '#22c55e' :
+          d.completeness_pct >= 50 ? '#eab308' : '#ef4444'
+        ),
+        borderRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: {
+          min: 0, max: 100,
+          ticks: { callback: v => v + '%', font: { size: 10 } },
+        },
+        x: { ticks: { font: { size: 10 } } },
+      },
+    },
+  });
+}
+
+// Init charts
+loadTimeSeries('PM25', '7d');
+loadCompleteness();
+
+// Wire up controls
+document.getElementById('pollutant-select').addEventListener('change', e => {
+  loadTimeSeries(e.target.value, document.getElementById('time-range-select').value);
+});
+document.getElementById('time-range-select').addEventListener('change', e => {
+  loadTimeSeries(document.getElementById('pollutant-select').value, e.target.value);
+});
+</script>
+{% endblock %}

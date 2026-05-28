@@ -1,0 +1,328 @@
+{% extends "base.html" %}
+{% block title %}{{ sensor.friendly_name }} — Nepal Air Observatory{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+
+  {# ── Breadcrumb #}
+  <nav class="flex items-center gap-2 text-xs text-slate-400 mb-6">
+    <a href="{% url 'observatory:home' %}" class="hover:text-slate-700">Home</a>
+    <span>/</span>
+    <a href="{% url 'observatory:sensor_list' %}" class="hover:text-slate-700">Sensors</a>
+    <span>/</span>
+    <span class="text-slate-600 font-medium truncate">{{ sensor.friendly_name }}</span>
+  </nav>
+
+  <div class="grid lg:grid-cols-3 gap-6">
+
+    {# ════════════════════ LEFT COLUMN — Station profile ══════════════ #}
+    <div class="lg:col-span-1 space-y-4">
+
+      {# Station identity card #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="h-2 {% if sensor.status == 'ACTIVE' %}bg-green-400{% elif sensor.status == 'OFFLINE' %}bg-red-400{% else %}bg-amber-400{% endif %}"></div>
+        <div class="p-6">
+          <div class="flex items-start justify-between gap-2">
+            <h1 class="text-xl font-bold text-slate-900 leading-tight">{{ sensor.friendly_name }}</h1>
+            <span class="status-badge status-{{ sensor.status|lower }} shrink-0">{{ sensor.get_status_display }}</span>
+          </div>
+          <p class="text-sm text-slate-500 mt-1">{{ sensor.site.name }} · {{ sensor.site.district }}, Nepal</p>
+
+          <div class="mt-4 flex flex-wrap gap-2">
+            <span class="tag {% if sensor.is_indoor %}tag-indoor{% else %}tag-outdoor{% endif %}">
+              {% if sensor.is_indoor %}🏠 Indoor{% else %}🌿 Outdoor{% endif %}
+            </span>
+            <span class="tag tag-default">{{ sensor.get_power_type_display }}</span>
+            <span class="tag tag-default">{{ sensor.get_connectivity_type_display }}</span>
+          </div>
+
+          <div class="mt-5 space-y-2 text-sm">
+            <div class="flex justify-between text-slate-600">
+              <span class="text-slate-400">Serial</span>
+              <span class="font-mono">{{ sensor.serial_number }}</span>
+            </div>
+            <div class="flex justify-between text-slate-600">
+              <span class="text-slate-400">Model</span>
+              <span>{{ sensor.model|default:"—" }}</span>
+            </div>
+            <div class="flex justify-between text-slate-600">
+              <span class="text-slate-400">Installed</span>
+              <span>{{ sensor.installed_at|date:"d M Y"|default:"—" }}</span>
+            </div>
+            {% if sensor.site.latitude and sensor.site.longitude %}
+            <div class="flex justify-between text-slate-600">
+              <span class="text-slate-400">Coordinates</span>
+              <span class="font-mono text-xs">{{ sensor.site.latitude|floatformat:4 }}, {{ sensor.site.longitude|floatformat:4 }}</span>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      {# 24h summary card #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">24-hour PM₂.₅ summary</h2>
+
+        <div class="text-center mb-4">
+          <div class="text-5xl font-bold {{ pm25_colour }}">
+            {% if pm25_avg_24h %}{{ pm25_avg_24h }}{% else %}—{% endif %}
+          </div>
+          <div class="text-sm text-slate-400 mt-1">µg/m³ · 24-hour average</div>
+          {% if pm25_avg_24h %}
+            <div class="mt-2 text-sm font-medium {{ pm25_colour }}">{{ pm25_category }}</div>
+          {% endif %}
+        </div>
+
+        {# WHO / Nepal guideline comparison #}
+        <div class="space-y-2 text-xs">
+          <div class="flex items-center justify-between rounded-lg px-3 py-2 {% if exceeds_who %}bg-red-50 border border-red-200{% else %}bg-green-50 border border-green-200{% endif %}">
+            <span class="{% if exceeds_who %}text-red-700{% else %}text-green-700{% endif %} font-medium">
+              WHO 24h guideline (15 µg/m³)
+            </span>
+            <span class="{% if exceeds_who %}text-red-600{% else %}text-green-600{% endif %} font-bold">
+              {% if exceeds_who %}Exceeds{% else %}Meets{% endif %}
+            </span>
+          </div>
+          <div class="flex items-center justify-between rounded-lg px-3 py-2 {% if exceeds_nepal %}bg-amber-50 border border-amber-200{% else %}bg-green-50 border border-green-200{% endif %}">
+            <span class="{% if exceeds_nepal %}text-amber-700{% else %}text-green-700{% endif %} font-medium">
+              Nepal NAAQS 24h (40 µg/m³)
+            </span>
+            <span class="{% if exceeds_nepal %}text-amber-600{% else %}text-green-600{% endif %} font-bold">
+              {% if exceeds_nepal %}Exceeds{% else %}Meets{% endif %}
+            </span>
+          </div>
+        </div>
+
+        {% if stats_24h %}
+        <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+          <div class="bg-slate-50 rounded-lg p-2">
+            <div class="text-slate-400">Min</div>
+            <div class="font-semibold text-slate-700">{{ stats_24h.min_val|floatformat:1|default:"—" }}</div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-2">
+            <div class="text-slate-400">Avg</div>
+            <div class="font-semibold text-slate-700">{{ pm25_avg_24h|default:"—" }}</div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-2">
+            <div class="text-slate-400">Max</div>
+            <div class="font-semibold text-slate-700">{{ stats_24h.max_val|floatformat:1|default:"—" }}</div>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+
+      {# Companion sensor (indoor/outdoor pair) #}
+      {% if companion %}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Paired station</h2>
+        <a href="{% url 'observatory:sensor_detail' companion.pk %}"
+           class="flex items-center gap-3 hover:text-nao-blue group">
+          <span class="text-lg">{% if companion.is_indoor %}🏠{% else %}🌿{% endif %}</span>
+          <div>
+            <div class="text-sm font-medium text-slate-800 group-hover:text-nao-blue transition-colors">{{ companion.friendly_name }}</div>
+            <div class="text-xs text-slate-400">{% if companion.is_indoor %}Indoor{% else %}Outdoor{% endif %} sensor at same site</div>
+          </div>
+          <svg class="w-4 h-4 text-slate-300 group-hover:text-nao-blue ml-auto transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </a>
+        <div class="mt-3 pt-3 border-t border-slate-100">
+          <a href="{% url 'observatory:indoor_outdoor' sensor.site.pk %}" class="text-xs text-nao-blue hover:underline">
+            View indoor/outdoor comparison →
+          </a>
+        </div>
+      </div>
+      {% endif %}
+
+      {# Download #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Download data</h2>
+        <div class="space-y-2">
+          <a href="/api/v1/readings/?sensor={{ sensor.pk }}&format=csv&quality=GOOD"
+             class="flex items-center gap-2 text-sm text-nao-blue hover:underline">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Cleaned readings (CSV)
+          </a>
+          {% if user.role in 'RESEARCHER ADMIN' %}
+          <a href="/api/v1/readings/?sensor={{ sensor.pk }}&format=csv"
+             class="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 hover:underline">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            All readings incl. raw (CSV)
+          </a>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Installation notes — public #}
+      {% if sensor.installation_notes %}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Installation context</h2>
+        <p class="text-sm text-slate-600 leading-relaxed">{{ sensor.installation_notes }}</p>
+      </div>
+      {% endif %}
+
+    </div>
+
+    {# ════════════════════ RIGHT COLUMN — Charts ══════════════════════ #}
+    <div class="lg:col-span-2 space-y-6">
+
+      {# Time-series chart #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-sm font-semibold text-slate-700">PM₂.₅ time series</h2>
+          <div class="flex gap-2 text-xs">
+            <button onclick="setRange(1)"  class="range-btn" data-range="1">24h</button>
+            <button onclick="setRange(7)"  class="range-btn" data-range="7">7d</button>
+            <button onclick="setRange(30)" class="range-btn range-btn-active" data-range="30">30d</button>
+          </div>
+        </div>
+        <canvas id="tsChart" height="240"></canvas>
+      </div>
+
+      {# Data completeness chart #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-sm font-semibold text-slate-700">Data completeness (last 30 days)</h2>
+            <p class="text-xs text-slate-400 mt-0.5">Fraction of expected readings received per day</p>
+          </div>
+        </div>
+        <canvas id="completenessChart" height="130"></canvas>
+      </div>
+
+      {# Maintenance log (public summary) #}
+      {% if maintenance_logs %}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-sm font-semibold text-slate-700 mb-4">Maintenance history</h2>
+        <div class="space-y-3">
+          {% for log in maintenance_logs %}
+          <div class="flex gap-3 text-sm">
+            <div class="text-xs text-slate-400 w-20 shrink-0 pt-0.5">{{ log.event_date|date:"d M Y" }}</div>
+            <div>
+              <span class="font-medium text-slate-700">{{ log.get_event_type_display }}</span>
+              {% if log.description %}
+                <p class="text-xs text-slate-500 mt-0.5">{{ log.description|truncatewords:25 }}</p>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# Data quality note #}
+      <div class="rounded-xl bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800 leading-relaxed">
+        <strong>Data quality note:</strong> Raw readings are flagged as GOOD, SUSPECT, BAD, or UNVALIDATED.
+        The chart above shows cleaned/validated values only. Gaps represent periods of sensor outage, power failure,
+        connectivity loss, or data flagged as suspect. Raw data is always preserved and never overwritten.
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const SENSOR_ID = {{ sensor.pk }};
+
+// ── Time-series chart ────────────────────────────────────────────────────────
+let tsChart;
+
+async function loadTimeSeries(days) {
+  const end = new Date();
+  const start = new Date(end - days * 86400 * 1000);
+  const fmt = d => d.toISOString().slice(0, 19);
+  const url = `/api/v1/charts/sensor/${SENSOR_ID}/timeseries/?pollutant=PM25&start=${fmt(start)}&end=${fmt(end)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return data;
+}
+
+async function initTimeSeries(days) {
+  const data = await loadTimeSeries(days);
+  const ctx = document.getElementById('tsChart').getContext('2d');
+  if (tsChart) tsChart.destroy();
+  tsChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: 'PM₂.₅ (µg/m³)',
+          data: data.points || [],
+          borderColor: '{{ sensor.is_indoor|yesno:"#dc2626,#2563eb" }}',
+          backgroundColor: '{{ sensor.is_indoor|yesno:"rgba(220,38,38,.08),rgba(37,99,235,.08)" }}',
+          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3,
+          parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+        },
+        {
+          label: 'WHO 24h (15 µg/m³)',
+          data: (data.points || []).map(p => ({ x: p.x, y: 15 })),
+          borderColor: '#16a34a', borderDash: [5, 4], borderWidth: 1.5,
+          pointRadius: 0, fill: false,
+        },
+        {
+          label: 'Nepal NAAQS (40 µg/m³)',
+          data: (data.points || []).map(p => ({ x: p.x, y: 40 })),
+          borderColor: '#b45309', borderDash: [3, 3], borderWidth: 1.5,
+          pointRadius: 0, fill: false,
+        },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { type: 'time', time: { unit: days <= 2 ? 'hour' : 'day' }, grid: { color: '#f1f5f9' } },
+        y: { beginAtZero: true, title: { display: true, text: 'µg/m³' }, grid: { color: '#f1f5f9' } }
+      },
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } }, tooltip: { mode: 'index', intersect: false } }
+    }
+  });
+}
+
+async function loadCompleteness() {
+  const url = `/api/v1/charts/sensor/${SENSOR_ID}/completeness/`;
+  const res = await fetch(url);
+  const data = await res.json();
+  const ctx = document.getElementById('completenessChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: (data.days || []).map(d => d.date),
+      datasets: [{
+        label: 'Completeness (%)',
+        data: (data.days || []).map(d => Math.round(d.completeness * 100)),
+        backgroundColor: (data.days || []).map(d =>
+          d.completeness >= 0.8 ? '#22c55e' : d.completeness >= 0.5 ? '#f59e0b' : '#ef4444'
+        ),
+        borderRadius: 3, borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false } },
+        y: { min: 0, max: 100, title: { display: true, text: '%' }, grid: { color: '#f1f5f9' } }
+      },
+      plugins: { legend: { display: false }, tooltip: { callbacks: {
+        label: c => `Completeness: ${c.parsed.y}%`
+      }}}
+    }
+  });
+}
+
+// ── Range buttons ────────────────────────────────────────────────────────────
+function setRange(days) {
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('range-btn-active'));
+  document.querySelector(`[data-range="${days}"]`).classList.add('range-btn-active');
+  initTimeSeries(days);
+}
+
+initTimeSeries(30);
+loadCompleteness();
+</script>
+{% endblock %}

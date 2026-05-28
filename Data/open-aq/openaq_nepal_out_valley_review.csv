@@ -1,0 +1,21 @@
+location_id,name,locality,latitude,longitude,datetime_first,datetime_last,provider,owner,likely_terai,matches_terai_keyword
+6143672,CEN-SR-06: Biratnagar Metropolitan City ward no 9 Office,,26.45611111,87.28388889,2025-11-26T17:00:00Z,2026-05-12T07:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6141726,CEN-SR-03:Biratnagar metropolitan city office ,,26.465215,87.283333,2025-11-25T01:00:00Z,2026-05-19T05:00:00Z,AirGradient,AirGradient,True,True
+6138104,CEN-SR-11: Janakpurdham Sub-metropolitian City Office,,26.7303,85.9317,2025-11-26T07:00:00Z,2026-05-18T07:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6151924,"CEN-SR-20: Janakpurdham SMC-08, Rajarshi Janak University",,26.739072,85.916906,2025-12-04T08:00:00Z,2026-05-08T03:00:00Z,AirGradient,AirGradient,True,True
+6135972,CEN-SR-13: Birgunj Metropolitan City Office,,27.0118695,84.8709016,2025-11-19T07:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6122103,CEN-SR-04: Birgunj Metropolitan City Ward No 25,,27.0264126,84.852162,2025-11-07T05:00:00Z,2026-05-18T07:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+5710078,Hetauda Udhyog Sang Office (CEN-SR-18),,27.40233,85.02521,2025-09-21T02:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+5709621,Hetauda Sub-Metropolitan City Office (CEN-SR-15),,27.43358,85.03828,2025-11-06T06:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6096083,CEN-SR-07: Siddharthanagar Municipality City Office Ward No. 5,,27.505918,83.451909,2025-10-15T09:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6096082,CEN-SR-10: Siddharthanagar Municipality Ward no. 4,,27.509584,83.421013,2025-10-15T11:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+5698877,Bharatpur Ward no 27 office Meghauli,,27.57961,84.23604,2025-09-19T00:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6161963,CEN-SR-19 : Bharatpur Ward 02,,27.69765,84.4323,2025-12-12T06:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6092405,CEN-SR-14: Dhangadhi Sub-metropolitan Ward 8,,28.699953,80.600298,2025-10-12T09:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,True
+6095032,"CEN-SR-17: Bhaluwang, Dang",,27.841728,82.763938,2025-10-14T11:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False
+6108737,"CEN-SR-12: Lamahi Municipality Office, Dang",,27.867904,82.526074,2025-10-26T05:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False
+6097220,CEN-SR-16: Pokhara Metropolitan City Ward No. 7 Office,,28.205667,83.973964,2025-10-16T10:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False
+6118806,"CEN-SR-05: Shree Vindhyavasini Secondary School, Pokhara",,28.262683,83.979606,2025-11-04T07:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False
+6095642,CEN-SR-08/ Birendranagar Municipality,,28.595355,81.62317,2025-10-14T23:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False
+6108844,CEN-SR-22:Birendranagar Ward 12 Sahakari Chowk,,28.59776,81.640329,2025-10-26T09:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False
+6092366,CEN_SR-09: Dhangadhdi Sub-metropolitan City Office,,28.70728,80.585126,2025-10-12T06:00:00Z,2026-05-19T05:00:00Z,AirGradient,Clean Energy Nepal (CEN),True,False

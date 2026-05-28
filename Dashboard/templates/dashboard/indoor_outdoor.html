@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Indoor/Outdoor — {{ site.name }} — Nepal AQ Dashboard{% endblock %}
+{% block page_title %}Indoor/Outdoor Comparison — {{ site.name }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Site info banner -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-5 py-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-base font-semibold text-gray-800">{{ site.name }}</h2>
+        <p class="text-xs text-gray-400">{{ site.district }} &bull; {{ site.latitude|floatformat:4 }}°N, {{ site.longitude|floatformat:4 }}°E</p>
+        {% if site.description %}
+          <p class="text-sm text-gray-500 mt-1">{{ site.description }}</p>
+        {% endif %}
+      </div>
+      {% if io_ratio %}
+      <div class="text-center bg-gray-50 border border-gray-200 rounded-xl px-6 py-3">
+        <p class="text-xs font-semibold text-gray-400 uppercase">I/O Ratio (24h)</p>
+        <p class="text-3xl font-bold {% if io_ratio > 1.2 %}text-red-500{% elif io_ratio > 0.8 %}text-yellow-500{% else %}text-green-600{% endif %}">
+          {{ io_ratio }}
+        </p>
+        <p class="text-xs text-gray-400">indoor / outdoor PM2.5</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Side-by-side sensor cards -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <!-- Indoor sensors -->
+    <div>
+      <h3 class="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-indigo-400 mr-1.5"></span>Indoor
+      </h3>
+      {% for sensor, stats in indoor_sensors %}
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-3">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="text-sm font-medium text-gray-800">{{ sensor.display_name }}</div>
+            <div class="text-xs text-gray-400">{{ sensor.serial_number }}</div>
+          </div>
+          <div class="text-right">
+            <div class="text-2xl font-bold text-indigo-600">
+              {% if stats.avg %}{{ stats.avg|floatformat:1 }}{% else %}—{% endif %}
+            </div>
+            <div class="text-xs text-gray-400">µg/m³ PM2.5 (24h avg)</div>
+            <div class="text-xs text-gray-400">{{ stats.count }} readings</div>
+          </div>
+        </div>
+        <div class="mt-3">
+          <a href="{{ sensor.get_absolute_url }}" class="text-xs text-indigo-600 hover:text-indigo-800">View full details →</a>
+        </div>
+      </div>
+      {% empty %}
+      <div class="bg-white rounded-xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
+        No indoor sensors at this site.
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Outdoor sensors -->
+    <div>
+      <h3 class="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
+        <span class="inline-block w-2.5 h-2.5 rounded-full bg-teal-400 mr-1.5"></span>Outdoor
+      </h3>
+      {% for sensor, stats in outdoor_sensors %}
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mb-3">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="text-sm font-medium text-gray-800">{{ sensor.display_name }}</div>
+            <div class="text-xs text-gray-400">{{ sensor.serial_number }}</div>
+          </div>
+          <div class="text-right">
+            <div class="text-2xl font-bold text-teal-600">
+              {% if stats.avg %}{{ stats.avg|floatformat:1 }}{% else %}—{% endif %}
+            </div>
+            <div class="text-xs text-gray-400">µg/m³ PM2.5 (24h avg)</div>
+            <div class="text-xs text-gray-400">{{ stats.count }} readings</div>
+          </div>
+        </div>
+        <!-- WHO comparison -->
+        {% if stats.avg %}
+          {% if stats.avg > nepal_naaqs_24h %}
+            <div class="mt-2 text-xs bg-red-50 text-red-700 border border-red-100 rounded px-2 py-1">
+              ⚠ Exceeds Nepal NAAQS ({{ nepal_naaqs_24h }} µg/m³)
+            </div>
+          {% elif stats.avg > who_24h %}
+            <div class="mt-2 text-xs bg-yellow-50 text-yellow-700 border border-yellow-100 rounded px-2 py-1">
+              Exceeds WHO 24h guideline ({{ who_24h }} µg/m³)
+            </div>
+          {% endif %}
+        {% endif %}
+        <div class="mt-3">
+          <a href="{{ sensor.get_absolute_url }}" class="text-xs text-teal-600 hover:text-teal-800">View full details →</a>
+        </div>
+      </div>
+      {% empty %}
+      <div class="bg-white rounded-xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
+        No outdoor sensors at this site.
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Combined time-series chart -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-4">PM2.5 Comparison — Last 7 Days</h2>
+    <canvas id="io-chart" height="80"></canvas>
+    <p class="text-xs text-gray-400 mt-2">
+      Purple = Indoor &bull; Teal = Outdoor &bull;
+      Dashed red = Nepal NAAQS ({{ nepal_naaqs_24h }} µg/m³) &bull;
+      Dashed blue = WHO 24h ({{ who_24h }} µg/m³)
+    </p>
+  </div>
+
+  <!-- Methodology note -->
+  <div class="bg-blue-50 border border-blue-100 rounded-xl px-5 py-4 text-xs text-blue-700">
+    <strong>Methodology note:</strong>
+    Indoor/outdoor ratios depend on infiltration factor, room ventilation, occupant activities (cooking, cleaning),
+    and measurement co-location precision. Values shown are 24-hour means from nearest available data.
+    I/O ratio &gt; 1 suggests indoor sources dominate; &lt; 1 suggests effective filtration or lower occupancy time.
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const WHO_24H = {{ who_24h }};
+const NEPAL_24H = {{ nepal_naaqs_24h }};
+const siteId = {{ site.pk }};
+
+// Get all sensor IDs at this site
+const indoorSensors = [{% for s, _ in indoor_sensors %}{{ s.pk }},{% endfor %}];
+const outdoorSensors = [{% for s, _ in outdoor_sensors %}{{ s.pk }},{% endfor %}];
+
+const COLORS_INDOOR = ['#8b5cf6', '#7c3aed'];
+const COLORS_OUTDOOR = ['#0d9488', '#0891b2'];
+
+async function loadIOChart() {
+  const start = new Date();
+  start.setDate(start.getDate() - 7);
+  const startISO = start.toISOString();
+
+  const datasets = [];
+
+  for (let i = 0; i < indoorSensors.length; i++) {
+    const id = indoorSensors[i];
+    try {
+      const resp = await fetch(`/api/v1/charts/sensor/${id}/timeseries/?pollutant=PM25&start=${startISO}`);
+      const data = await resp.json();
+      datasets.push({
+        label: `Indoor (${data.sensor_name})`,
+        data: data.points.map(p => ({ x: new Date(p.ts), y: p.value })),
+        borderColor: COLORS_INDOOR[i % COLORS_INDOOR.length],
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+      });
+    } catch(e) {}
+  }
+
+  for (let i = 0; i < outdoorSensors.length; i++) {
+    const id = outdoorSensors[i];
+    try {
+      const resp = await fetch(`/api/v1/charts/sensor/${id}/timeseries/?pollutant=PM25&start=${startISO}`);
+      const data = await resp.json();
+      const labels = data.points.map(p => new Date(p.ts));
+      datasets.push({
+        label: `Outdoor (${data.sensor_name})`,
+        data: data.points.map(p => ({ x: new Date(p.ts), y: p.value })),
+        borderColor: COLORS_OUTDOOR[i % COLORS_OUTDOOR.length],
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+      });
+    } catch(e) {}
+  }
+
+  // Guideline lines — approximate using first dataset's labels
+  if (datasets.length > 0 && datasets[0].data.length > 0) {
+    const pts = datasets[0].data;
+    datasets.push({
+      label: 'Nepal NAAQS',
+      data: pts.map(p => ({ x: p.x, y: NEPAL_24H })),
+      borderColor: '#ef4444', borderDash: [6,4], borderWidth: 1.5,
+      pointRadius: 0, fill: false,
+    });
+    datasets.push({
+      label: 'WHO 24h',
+      data: pts.map(p => ({ x: p.x, y: WHO_24H })),
+      borderColor: '#6366f1', borderDash: [6,4], borderWidth: 1.5,
+      pointRadius: 0, fill: false,
+    });
+  }
+
+  new Chart(document.getElementById('io-chart').getContext('2d'), {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { type: 'time', time: { tooltipFormat: 'MMM d, HH:mm' }, ticks: { font: { size: 10 } } },
+        y: { beginAtZero: true, ticks: { font: { size: 10 } }, title: { display: true, text: 'µg/m³', font: { size: 10 } } },
+      },
+    },
+  });
+}
+
+loadIOChart();
+</script>
+{% endblock %}

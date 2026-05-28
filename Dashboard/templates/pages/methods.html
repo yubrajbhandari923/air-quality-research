@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Methods — Nepal Air Observatory{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto px-4 sm:px-6 py-12">
+
+  <h1 class="text-2xl font-bold text-slate-900">Methodology</h1>
+  <p class="mt-2 text-sm text-slate-500 max-w-2xl leading-relaxed">
+    Transparent documentation of how data is collected, cleaned, interpreted, and stored. Science should be reproducible.
+  </p>
+
+  <div class="mt-10 prose prose-slate max-w-none prose-headings:font-semibold prose-headings:text-slate-800 prose-p:text-slate-600 prose-p:leading-relaxed prose-a:text-nao-blue prose-code:text-nao-red prose-code:bg-slate-100 prose-code:px-1 prose-code:rounded">
+
+    <h2>Sensor hardware</h2>
+    <p>
+      The primary monitoring platform uses two sensor models manufactured by PurpleAir/AirAssure:
+    </p>
+    <ul>
+      <li><strong>Bluesky 8143</strong> (outdoor) — measures PM1, PM2.5, PM4, PM10 via laser particle counting, plus temperature, relative humidity, and barometric pressure.</li>
+      <li><strong>Air Assure 8144</strong> (indoor) — same PM channels plus CO₂ (NDIR) and total VOC.</li>
+    </ul>
+    <p>
+      Both instruments use a Sensirion SPS30 optical particle counter and report at approximately 1-minute intervals when online. These are research-grade low-cost sensors and are not reference instruments. They have not been collocated with regulatory monitors for formal correction factor derivation at these sites.
+    </p>
+
+    <h2>Data collection</h2>
+    <p>
+      Sensors upload readings via Wi-Fi to a cloud API. Our ingestion pipeline polls the API or processes CSV exports on a scheduled basis. Every ingestion attempt is logged to the <code>IngestionLog</code> table, including failures. Sensors may go offline due to:
+    </p>
+    <ul>
+      <li>Power outages (load shedding is common in rural Nepal)</li>
+      <li>Internet connectivity loss</li>
+      <li>SD card or firmware errors</li>
+      <li>Physical damage or maintenance</li>
+    </ul>
+
+    <h2>Quality flags</h2>
+    <p>Every reading is assigned one of the following quality flags:</p>
+    <div class="not-prose overflow-x-auto rounded-xl border border-slate-200 my-4">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">Flag</th>
+            <th class="text-left px-4 py-2.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">Meaning</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 text-xs">
+          <tr><td class="px-4 py-2.5"><span class="qf-badge qf-good">GOOD</span></td><td class="px-4 py-2.5 text-slate-600">Value within expected range, no anomalies detected.</td></tr>
+          <tr><td class="px-4 py-2.5"><span class="qf-badge qf-suspect">SUSPECT</span></td><td class="px-4 py-2.5 text-slate-600">Value flagged as potentially erroneous (e.g. PM2.5 &gt; 500 µg/m³, all channels simultaneously zero).</td></tr>
+          <tr><td class="px-4 py-2.5"><span class="qf-badge qf-bad">BAD</span></td><td class="px-4 py-2.5 text-slate-600">Known sensor malfunction period or calibration error.</td></tr>
+          <tr><td class="px-4 py-2.5"><span class="qf-badge qf-missing">MISSING</span></td><td class="px-4 py-2.5 text-slate-600">Gap in the expected reporting sequence.</td></tr>
+          <tr><td class="px-4 py-2.5"><span class="qf-badge qf-unvalidated">UNVALIDATED</span></td><td class="px-4 py-2.5 text-slate-600">Newly ingested reading, not yet reviewed.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      <strong>Raw values are never overwritten.</strong> All cleaning and calibration writes to a separate <code>cleaned_value</code> column. The raw reading is permanently preserved.
+    </p>
+
+    <h2>PM₂.₅ interpretation</h2>
+    <p>
+      PM₂.₅ (particulate matter smaller than 2.5 µm) is used as the primary exposure indicator because it is most strongly linked to respiratory and cardiovascular health outcomes. We display values in µg/m³ and compare to two guidelines:
+    </p>
+    <ul>
+      <li><strong>WHO 2021 guideline</strong>: 24-hour mean ≤ 15 µg/m³; annual mean ≤ 5 µg/m³.</li>
+      <li><strong>Nepal NAAQS</strong> (National Ambient Air Quality Standard): 24-hour mean ≤ 40 µg/m³.</li>
+    </ul>
+    <p>
+      Low-cost optical particle counters can undercount or overcount PM depending on particle composition, humidity, and temperature. High relative humidity (&gt; 85%) can cause hygroscopic growth of particles, artificially inflating PM readings. We do not apply humidity corrections at this stage; this is a documented limitation.
+    </p>
+
+    <h2>Indoor/outdoor comparison</h2>
+    <p>
+      We compute hourly median values for matched indoor and outdoor sensors at the same site.
+      The indoor/outdoor (I/O) ratio is computed as: I/O = PM₂.₅_indoor / PM₂.₅_outdoor, using matched hours only.
+      Statistical significance of the difference is tested using the Wilcoxon signed-rank test (non-parametric, because PM₂.₅ is not normally distributed).
+      Effect size is reported as rank-biserial correlation.
+    </p>
+
+    <h2>Data completeness</h2>
+    <p>
+      Completeness is computed per sensor per day as: (observed readings) / (expected readings based on nominal reporting interval).
+      We use a 1-minute expected interval for these sensors. A day is classified as:
+    </p>
+    <ul>
+      <li><strong>High completeness</strong> (&ge; 80%): Green</li>
+      <li><strong>Moderate completeness</strong> (50–79%): Amber</li>
+      <li><strong>Low completeness</strong> (&lt; 50%): Red</li>
+    </ul>
+
+    <h2>Population exposure estimates</h2>
+    <p>
+      Population exposure is estimated using a simple nearest-sensor assignment:
+    </p>
+    <ol>
+      <li>District centroids are calculated from 2021 Nepal Census district boundaries.</li>
+      <li>Each district centroid is assigned the PM₂.₅ value from its nearest sensor (haversine distance).</li>
+      <li>Confidence is assigned based on sensor distance and data completeness.</li>
+    </ol>
+    <p>
+      <strong>This is an approximation, not a precise exposure model.</strong> It does not account for population density within districts, topography, source proximity, indoor time, or inter-district variation. Do not use for regulatory or health-intervention decisions without independent validation.
+    </p>
+
+    <h2>Code and reproducibility</h2>
+    <p>
+      The full data pipeline, ingestion framework, and analysis code are available on GitHub.
+      Each ingestion run is logged with source file, converter class, records saved, duplicates, and errors.
+      Notebooks used for exploratory analysis (e.g. Belauri indoor/outdoor comparison) are stored alongside the codebase.
+    </p>
+
+  </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Profile — {{ user.username }}{% endblock %}
+{% block page_title %}My Profile{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+    <div class="flex items-center space-x-4">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full bg-blue-800 flex items-center justify-center text-white text-2xl font-bold">
+        {{ user.username|first|upper }}
+      </div>
+      <div>
+        <h2 class="text-lg font-semibold text-gray-800">{{ user.get_full_name|default:user.username }}</h2>
+        <p class="text-sm text-gray-500">{{ user.email }}</p>
+        <span class="inline-block mt-1 px-2 py-0.5 text-xs font-semibold rounded-full
+          {% if user.role == 'ADMIN' %}bg-red-100 text-red-700
+          {% elif user.role == 'MAINTAINER' %}bg-orange-100 text-orange-700
+          {% elif user.role == 'RESEARCHER' %}bg-blue-100 text-blue-700
+          {% else %}bg-gray-100 text-gray-600{% endif %}">
+          {{ user.get_role_display }}
+        </span>
+      </div>
+    </div>
+
+    {% if user.affiliation %}
+    <dl class="mt-4 pt-4 border-t border-gray-100 grid grid-cols-2 gap-4 text-sm">
+      <div>
+        <dt class="text-gray-400 text-xs">Affiliation</dt>
+        <dd class="text-gray-700 font-medium">{{ user.affiliation }}</dd>
+      </div>
+      <div>
+        <dt class="text-gray-400 text-xs">Member since</dt>
+        <dd class="text-gray-700 font-medium">{{ user.date_joined|date:"M Y" }}</dd>
+      </div>
+    </dl>
+    {% endif %}
+  </div>
+
+  <!-- Access summary -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-3">Access Level: {{ user.get_role_display }}</h3>
+    <ul class="space-y-2 text-sm text-gray-600">
+      <li class="flex items-center space-x-2">
+        <svg class="h-4 w-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+        </svg>
+        <span>National overview and sensor list</span>
+      </li>
+      {% if user.is_researcher_or_above %}
+      <li class="flex items-center space-x-2">
+        <svg class="h-4 w-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+        </svg>
+        <span>Full data access, raw downloads, API documentation</span>
+      </li>
+      {% endif %}
+      {% if user.is_maintainer_or_above %}
+      <li class="flex items-center space-x-2">
+        <svg class="h-4 w-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+        </svg>
+        <span>Sensor metadata editing, maintenance logs</span>
+      </li>
+      {% endif %}
+      {% if user.is_dashboard_admin %}
+      <li class="flex items-center space-x-2">
+        <svg class="h-4 w-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+        </svg>
+        <span>Full Wagtail CMS, user management, API key admin</span>
+      </li>
+      {% endif %}
+    </ul>
+  </div>
+</div>
+{% endblock %}

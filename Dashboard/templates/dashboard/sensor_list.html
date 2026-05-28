@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Sensor List — Nepal AQ Dashboard{% endblock %}
+{% block page_title %}Sensor List{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <!-- Filters -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 px-5 py-4">
+    <form method="get" class="flex flex-wrap gap-3 items-end">
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 mb-1">Status</label>
+        <select name="status" class="text-sm border border-gray-200 rounded-md px-3 py-1.5 text-gray-700">
+          <option value="">All</option>
+          {% for value, label in status_choices %}
+            <option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-500 mb-1">Placement</label>
+        <select name="indoor" class="text-sm border border-gray-200 rounded-md px-3 py-1.5 text-gray-700">
+          <option value="">All</option>
+          <option value="false">Outdoor only</option>
+          <option value="true">Indoor only</option>
+        </select>
+      </div>
+      <button type="submit" class="px-4 py-1.5 bg-nepal-blue text-white text-sm rounded-md hover:bg-blue-800">
+        Filter
+      </button>
+      <a href="{% url 'dashboard:sensor_list' %}" class="px-4 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-md hover:bg-gray-200">
+        Clear
+      </a>
+    </form>
+  </div>
+
+  <!-- Table -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="px-5 py-3 border-b border-gray-100 flex justify-between items-center">
+      <h2 class="text-sm font-semibold text-gray-700">
+        {{ sensors_with_data|length }} Sensor{{ sensors_with_data|length|pluralize }}
+      </h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-gray-100">
+        <thead class="bg-gray-50">
+          <tr>
+            <th class="px-5 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Status</th>
+            <th class="px-5 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Sensor</th>
+            <th class="px-5 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Site</th>
+            <th class="px-5 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Type</th>
+            <th class="px-5 py-3 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">PM2.5 (latest)</th>
+            <th class="px-5 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Category</th>
+            <th class="px-5 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Last Seen</th>
+            <th class="px-5 py-3"></th>
+          </tr>
+        </thead>
+        <tbody class="bg-white divide-y divide-gray-50">
+          {% for item in sensors_with_data %}
+          <tr class="hover:bg-gray-50 transition-colors">
+            <td class="px-5 py-3">
+              <span class="inline-block w-2.5 h-2.5 rounded-full {{ item.sensor.status_css_class }}"></span>
+            </td>
+            <td class="px-5 py-3">
+              <div class="text-sm font-medium text-gray-800">{{ item.sensor.display_name }}</div>
+              <div class="text-xs text-gray-400">{{ item.sensor.serial_number }}</div>
+            </td>
+            <td class="px-5 py-3">
+              <div class="text-sm text-gray-700">{{ item.sensor.site.name }}</div>
+              <div class="text-xs text-gray-400">{{ item.sensor.site.district }}</div>
+            </td>
+            <td class="px-5 py-3">
+              {% if item.sensor.is_indoor %}
+                <span class="px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-full">Indoor</span>
+              {% else %}
+                <span class="px-2 py-0.5 text-xs font-medium bg-teal-100 text-teal-700 rounded-full">Outdoor</span>
+              {% endif %}
+            </td>
+            <td class="px-5 py-3 text-right">
+              <span class="text-lg font-bold {{ item.pm25_colour }}">
+                {{ item.pm25_value|default:"—" }}
+              </span>
+              {% if item.pm25_value %}<span class="text-xs text-gray-400"> µg/m³</span>{% endif %}
+            </td>
+            <td class="px-5 py-3">
+              <span class="text-sm {{ item.pm25_colour }}">{{ item.pm25_category }}</span>
+            </td>
+            <td class="px-5 py-3 text-xs text-gray-400">
+              {% if item.last_seen %}{{ item.last_seen|timesince }} ago{% else %}—{% endif %}
+            </td>
+            <td class="px-5 py-3 text-right">
+              <a href="{{ item.sensor.get_absolute_url }}" class="text-xs text-nepal-blue hover:text-blue-800 font-medium">
+                Details →
+              </a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="8" class="px-5 py-10 text-center text-gray-400 text-sm">
+              No sensors found. Try adjusting filters or run
+              <code class="bg-gray-100 px-1 rounded">python manage.py load_dummy_data</code>.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

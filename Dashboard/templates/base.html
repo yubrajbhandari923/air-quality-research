@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Nepal Air Observatory{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}Open air-quality data for understanding what people actually breathe in Nepal.{% endblock %}" />
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            nao: {
+              red:    '#B91C1C', /* Nepal-flag crimson, slightly darkened for text */
+              redlt:  '#FEF2F2',
+              blue:   '#1d4ed8',
+              bluelt: '#EFF6FF',
+              slate:  '#0f172a',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet.js -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Chart.js + date adapter -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+  <!-- Inter font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style type="text/tailwindcss">
+    /* ── Navigation ──────────────────────────────────────────────────── */
+    .nav-link {
+      @apply px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors;
+    }
+    .nav-link-active { @apply text-nao-red bg-nao-redlt; }
+    .mob-link {
+      @apply block px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors;
+    }
+
+    /* ── Typography ──────────────────────────────────────────────────── */
+    .section-heading { @apply text-xl font-bold text-slate-900; }
+
+    /* ── Stat cards ──────────────────────────────────────────────────── */
+    .stat-card  { @apply bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4; }
+    .stat-label { @apply text-xs font-medium text-slate-400 uppercase tracking-wide mb-1; }
+    .stat-value { @apply text-3xl font-bold leading-tight; }
+    .stat-sub   { @apply text-xs text-slate-400 mt-0.5; }
+
+    /* ── Finding cards ───────────────────────────────────────────────── */
+    .finding-card  { @apply bg-white rounded-xl border border-slate-200 p-5 shadow-sm; }
+    .finding-icon  { @apply inline-flex items-center justify-center w-10 h-10 rounded-xl mb-3; }
+    .finding-title { @apply text-sm font-semibold text-slate-800 mb-1; }
+    .finding-body  { @apply text-xs text-slate-500 leading-relaxed; }
+
+    /* ── Analysis cards ──────────────────────────────────────────────── */
+    .analysis-card    { @apply bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:border-nao-red hover:shadow-md transition-all flex flex-col; }
+    .analysis-icon    { @apply inline-flex items-center justify-center w-11 h-11 rounded-xl mb-4; }
+    .analysis-icon-sm { @apply inline-flex items-center justify-center w-9 h-9 rounded-xl text-base; }
+    .analysis-title   { @apply text-sm font-semibold text-slate-800 mb-2; }
+    .analysis-body    { @apply text-xs text-slate-500 leading-relaxed flex-1; }
+    .analysis-link    { @apply text-xs font-medium text-nao-blue group-hover:underline mt-3 block; }
+
+    /* ── Status badges ───────────────────────────────────────────────── */
+    .status-badge         { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold; }
+    .status-active        { @apply bg-green-50 text-green-700 border border-green-200; }
+    .status-offline       { @apply bg-red-50 text-red-700 border border-red-200; }
+    .status-maintenance   { @apply bg-amber-50 text-amber-700 border border-amber-200; }
+    .status-decommissioned{ @apply bg-slate-100 text-slate-500; }
+    .status-dot               { @apply inline-block w-1.5 h-1.5 rounded-full; }
+    .status-dot-active        { @apply bg-green-500; }
+    .status-dot-offline       { @apply bg-red-500; }
+    .status-dot-maintenance   { @apply bg-amber-500; }
+    .status-dot-decommissioned{ @apply bg-slate-400; }
+
+    /* ── Quality flag badges ─────────────────────────────────────────── */
+    .qf-badge       { @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold; }
+    .qf-good        { @apply bg-green-100 text-green-800; }
+    .qf-suspect     { @apply bg-yellow-100 text-yellow-800; }
+    .qf-bad         { @apply bg-red-100 text-red-800; }
+    .qf-missing     { @apply bg-gray-100 text-gray-600; }
+    .qf-unvalidated { @apply bg-blue-100 text-blue-700; }
+
+    /* ── Tags ────────────────────────────────────────────────────────── */
+    .tag         { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium; }
+    .tag-indoor  { @apply bg-purple-50 text-purple-700; }
+    .tag-outdoor { @apply bg-sky-50 text-sky-700; }
+    .tag-default { @apply bg-slate-100 text-slate-600; }
+
+    /* ── Confidence badges ───────────────────────────────────────────── */
+    .confidence-badge  { @apply inline-flex px-2 py-0.5 rounded-full text-xs font-semibold; }
+    .confidence-high   { @apply bg-green-100 text-green-800; }
+    .confidence-medium { @apply bg-amber-100 text-amber-800; }
+    .confidence-low    { @apply bg-red-100 text-red-700; }
+    .confidence-none   { @apply bg-slate-100 text-slate-500; }
+
+    /* ── Buttons ─────────────────────────────────────────────────────── */
+    .btn-primary   { @apply inline-flex items-center gap-2 bg-nao-red hover:bg-red-800 text-white font-semibold rounded-lg px-4 py-2 transition-colors; }
+    .btn-secondary { @apply inline-flex items-center gap-2 border border-slate-300 text-slate-700 hover:border-slate-400 hover:bg-slate-50 font-medium rounded-lg px-4 py-2 transition-colors text-sm; }
+
+    /* ── Forms ───────────────────────────────────────────────────────── */
+    .form-select { @apply rounded-lg border-slate-300 shadow-sm focus:border-nao-blue focus:ring-nao-blue text-sm py-1.5; }
+    .form-input  { @apply w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:border-nao-blue focus:ring-1 focus:ring-nao-blue; }
+
+    /* ── Chart range buttons ─────────────────────────────────────────── */
+    .range-btn        { @apply text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:border-nao-blue hover:text-nao-blue transition-colors; }
+    .range-btn-active { @apply bg-nao-blue text-white border-nao-blue; }
+
+    /* ── Sensor chips ────────────────────────────────────────────────── */
+    .sensor-chip        { @apply text-xs font-medium px-3 py-1.5 rounded-full border border-slate-200 text-slate-600 hover:border-nao-blue hover:text-nao-blue transition-colors cursor-pointer; }
+    .sensor-chip-active { @apply bg-nao-blue text-white border-nao-blue; }
+
+    /* ── Portal cards ────────────────────────────────────────────────── */
+    .portal-card       { @apply bg-white rounded-xl border border-slate-200 p-6 shadow-sm; }
+    .portal-card-icon  { @apply inline-flex items-center justify-center w-11 h-11 rounded-xl mb-4; }
+    .portal-card-title { @apply text-sm font-semibold text-slate-800 mb-1; }
+    .portal-card-body  { @apply text-xs text-slate-500 leading-relaxed; }
+    .portal-link       { @apply block text-xs font-medium text-nao-blue hover:text-blue-800 hover:underline py-0.5; }
+
+    /* ── Map containers ──────────────────────────────────────────────── */
+    #full-map, #main-map { background: #e8eef4; }
+
+    /* ── Prose (methods page) ────────────────────────────────────────── */
+    .prose h2     { @apply text-lg font-semibold text-slate-800 mt-8 mb-3 border-b border-slate-100 pb-2; }
+    .prose h3     { @apply text-base font-semibold text-slate-700 mt-5 mb-2; }
+    .prose p, .prose li { @apply text-sm text-slate-600 leading-relaxed; }
+    .prose ul, .prose ol { @apply pl-5 space-y-1 my-3; }
+    .prose ul li  { @apply list-disc; }
+    .prose ol li  { @apply list-decimal; }
+    .prose strong { @apply font-semibold text-slate-800; }
+    .prose a      { @apply text-nao-blue hover:underline; }
+    .prose code   { @apply text-nao-red bg-red-50 px-1 py-0.5 rounded text-xs font-mono; }
+
+    /* ── Print ───────────────────────────────────────────────────────── */
+    @media print {
+      nav, footer { display: none !important; }
+      .no-print   { display: none !important; }
+      body { background: white; font-size: 10pt; }
+    }
+  </style>
+
+  {% block extra_head %}{% endblock %}
+</head>
+
+<body class="bg-gray-50 text-slate-800 font-sans antialiased">
+
+  {# ── Top navigation ─────────────────────────────────────────────── #}
+  {% include "components/topnav.html" %}
+
+  {# ── Flash messages ─────────────────────────────────────────────── #}
+  {% if messages %}
+    <div class="max-w-7xl mx-auto px-4 pt-4 space-y-2">
+      {% for message in messages %}
+        <div class="flex items-start gap-3 rounded-lg border px-4 py-3 text-sm font-medium
+          {% if message.tags == 'success' %}bg-green-50 border-green-200 text-green-800
+          {% elif message.tags == 'error'   %}bg-red-50   border-red-200   text-red-800
+          {% elif message.tags == 'warning' %}bg-amber-50 border-amber-200 text-amber-800
+          {% else %}bg-blue-50 border-blue-200 text-blue-800{% endif %}">
+          <span class="flex-1">{{ message }}</span>
+          <button onclick="this.parentElement.remove()" class="opacity-60 hover:opacity-100 text-lg leading-none">&times;</button>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {# ── Page content ───────────────────────────────────────────────── #}
+  {% block body %}
+    <main class="{% block main_class %}{% endblock %}">
+      {% block content %}{% endblock %}
+    </main>
+  {% endblock %}
+
+  {# ── Footer ─────────────────────────────────────────────────────── #}
+  {% include "components/footer.html" %}
+
+  {# ── Base JS ─────────────────────────────────────────────────────── #}
+  <script>
+    // Set Chart.js global defaults once
+    Chart.defaults.font.family = 'Inter, system-ui, sans-serif';
+    Chart.defaults.color = '#475569';
+    Chart.defaults.plugins.legend.labels.boxWidth = 12;
+    Chart.defaults.plugins.tooltip.cornerRadius = 6;
+    Chart.defaults.plugins.tooltip.padding = 10;
+
+    const WHO_24H = 15;
+    const NEPAL_NAAQS_24H = 40;
+
+    function whoAnnotationDataset() {
+      return {
+        label: 'WHO 24h guideline (15 µg/m³)',
+        data: [], borderColor: '#16a34a', borderWidth: 1.5,
+        borderDash: [5, 4], pointRadius: 0, fill: false, tension: 0,
+      };
+    }
+    function nepalAnnotationDataset() {
+      return {
+        label: 'Nepal NAAQS 24h (40 µg/m³)',
+        data: [], borderColor: '#b45309', borderWidth: 1.5,
+        borderDash: [3, 3], pointRadius: 0, fill: false, tension: 0,
+      };
+    }
+  </script>
+
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

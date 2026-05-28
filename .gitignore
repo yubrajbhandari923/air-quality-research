@@ -221,3 +221,5 @@ __marimo__/
 
 Abhishek/
 *.zip
+.DS_Store
+*.sqlite3

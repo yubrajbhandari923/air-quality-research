@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}National Overview — Nepal Air Quality Dashboard{% endblock %}
+{% block page_title %}National Overview{% endblock %}
+
+{% block content %}
+<!-- Summary stats cards -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Active Sensors</p>
+    <p class="text-3xl font-bold text-green-600 mt-1">{{ active_count }}</p>
+    <p class="text-xs text-gray-400 mt-1">of {{ sensor_cards|length }} total</p>
+  </div>
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Offline</p>
+    <p class="text-3xl font-bold text-red-500 mt-1">{{ offline_count }}</p>
+    <p class="text-xs text-gray-400 mt-1">sensors</p>
+  </div>
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Readings (24h)</p>
+    <p class="text-3xl font-bold text-blue-600 mt-1">{{ readings_today|default:"—" }}</p>
+    <p class="text-xs text-gray-400 mt-1">data points</p>
+  </div>
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Monitoring Sites</p>
+    <p class="text-3xl font-bold text-gray-700 mt-1">{{ sites|length }}</p>
+    <p class="text-xs text-gray-400 mt-1">locations</p>
+  </div>
+</div>
+
+<!-- WHO Guideline Banner -->
+<div class="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="bg-blue-50 border border-blue-200 rounded-xl px-5 py-3 flex items-center space-x-4">
+    <div class="flex-shrink-0">
+      <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-blue-100">
+        <svg class="h-5 w-5 text-blue-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </span>
+    </div>
+    <div>
+      <p class="text-sm font-semibold text-blue-800">WHO 2021 PM2.5 Guideline</p>
+      <p class="text-xs text-blue-600">Annual: 5 µg/m³ &nbsp;|&nbsp; 24-hour: {{ who_24h }} µg/m³</p>
+    </div>
+  </div>
+  <div class="bg-yellow-50 border border-yellow-200 rounded-xl px-5 py-3 flex items-center space-x-4">
+    <div class="flex-shrink-0">
+      <span class="inline-flex items-center justify-center h-10 w-10 rounded-full bg-yellow-100">
+        <svg class="h-5 w-5 text-yellow-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      </span>
+    </div>
+    <div>
+      <p class="text-sm font-semibold text-yellow-800">Nepal NAAQS</p>
+      <p class="text-xs text-yellow-600">National standard PM2.5 24-hour: {{ nepal_naaqs_24h }} µg/m³</p>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Map -->
+  <div class="lg:col-span-2">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="px-5 py-3 border-b border-gray-100 flex justify-between items-center">
+        <h2 class="text-sm font-semibold text-gray-700">Sensor Locations</h2>
+        <span class="text-xs text-gray-400">Belauri, Kanchanpur &mdash; 28.68°N, 80.36°E</span>
+      </div>
+      <div id="national-map" style="height: 380px;"></div>
+    </div>
+  </div>
+
+  <!-- Sensor Cards -->
+  <div class="space-y-3">
+    <h2 class="text-sm font-semibold text-gray-600 uppercase tracking-wide px-1">Sensors</h2>
+    {% for card in sensor_cards %}
+    <a href="{{ card.sensor.get_absolute_url }}"
+       class="block bg-white rounded-xl shadow-sm border border-gray-100 p-4 hover:shadow-md transition-shadow">
+      <div class="flex items-start justify-between">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center space-x-2">
+            <!-- Status dot -->
+            <span class="inline-block w-2.5 h-2.5 rounded-full {{ card.sensor.status_css_class }}"></span>
+            <span class="text-sm font-semibold text-gray-800 truncate">{{ card.sensor.display_name }}</span>
+          </div>
+          <div class="mt-0.5 text-xs text-gray-400">
+            {{ card.sensor.site.name }} &bull; {% if card.sensor.is_indoor %}Indoor{% else %}Outdoor{% endif %}
+          </div>
+          <div class="mt-0.5 text-xs text-gray-400">{{ card.sensor.get_status_display }}</div>
+        </div>
+        <div class="text-right ml-3 flex-shrink-0">
+          {% if card.pm25_value %}
+            <div class="text-2xl font-bold {{ card.pm25_colour }}">{{ card.pm25_value|floatformat:0 }}</div>
+            <div class="text-xs text-gray-400">µg/m³ PM2.5</div>
+            {% if card.pm25_value > nepal_naaqs_24h %}
+              <span class="inline-block mt-1 px-1.5 py-0.5 text-xs font-bold bg-red-100 text-red-700 rounded">
+                Exceeds Nepal NAAQS
+              </span>
+            {% elif card.pm25_value > who_24h %}
+              <span class="inline-block mt-1 px-1.5 py-0.5 text-xs font-bold bg-yellow-100 text-yellow-700 rounded">
+                Exceeds WHO 24h
+              </span>
+            {% else %}
+              <span class="inline-block mt-1 px-1.5 py-0.5 text-xs font-bold bg-green-100 text-green-700 rounded">
+                Below WHO
+              </span>
+            {% endif %}
+          {% else %}
+            <div class="text-2xl font-bold text-gray-300">—</div>
+            <div class="text-xs text-gray-400">No data</div>
+          {% endif %}
+        </div>
+      </div>
+      {% if card.last_seen %}
+      <div class="mt-2 text-xs text-gray-300">Last seen: {{ card.last_seen|timesince }} ago</div>
+      {% endif %}
+    </a>
+    {% empty %}
+    <div class="bg-white rounded-xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
+      No sensors found. Run <code class="bg-gray-100 px-1 rounded">python manage.py load_dummy_data</code>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Initialise Leaflet map
+const sensors = [
+  {% for card in sensor_cards %}
+  {
+    lat: {{ card.sensor.site.latitude }},
+    lon: {{ card.sensor.site.longitude }},
+    name: "{{ card.sensor.display_name }}",
+    site: "{{ card.sensor.site.name }}",
+    pm25: {{ card.pm25_value|default:"null" }},
+    isIndoor: {{ card.sensor.is_indoor|yesno:"true,false" }},
+    url: "{{ card.sensor.get_absolute_url }}",
+    status: "{{ card.sensor.status }}",
+  },
+  {% endfor %}
+];
+
+const map = L.map('national-map').setView([28.6844, 80.3646], 10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 18,
+}).addTo(map);
+
+sensors.forEach(s => {
+  const colour = s.status === 'ACTIVE' ? '#22c55e' : '#ef4444';
+  const marker = L.circleMarker([s.lat, s.lon], {
+    radius: 10,
+    fillColor: colour,
+    color: '#fff',
+    weight: 2,
+    opacity: 1,
+    fillOpacity: 0.85,
+  }).addTo(map);
+
+  const pm25Text = s.pm25 != null ? `<strong>${s.pm25.toFixed(1)} µg/m³</strong>` : 'No data';
+  marker.bindPopup(`
+    <div class="text-sm">
+      <strong>${s.name}</strong><br/>
+      ${s.site} &bull; ${s.isIndoor ? 'Indoor' : 'Outdoor'}<br/>
+      PM2.5: ${pm25Text}<br/>
+      <a href="${s.url}" style="color:#1d4ed8">View details →</a>
+    </div>
+  `);
+});
+
+// Fit bounds to all markers
+if (sensors.length) {
+  const bounds = sensors.map(s => [s.lat, s.lon]);
+  if (bounds.length === 1) {
+    map.setView(bounds[0], 12);
+  } else {
+    map.fitBounds(bounds, { padding: [30, 30] });
+  }
+}
+</script>
+{% endblock %}

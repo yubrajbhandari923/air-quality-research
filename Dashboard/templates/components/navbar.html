@@ -1,0 +1,47 @@
+{% load static %}
+<header class="bg-white shadow-sm border-b border-gray-200 flex-shrink-0">
+  <div class="flex items-center justify-between h-16 px-4 sm:px-6">
+    <!-- Mobile menu button -->
+    <button type="button" onclick="document.getElementById('sidebar').classList.toggle('hidden')"
+            class="lg:hidden p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100">
+      <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+    </button>
+
+    <!-- Breadcrumb / Page title -->
+    <div class="flex-1 px-4 lg:px-0">
+      <h1 class="text-lg font-semibold text-gray-800">
+        {% block page_title %}Nepal Air Quality Dashboard{% endblock %}
+      </h1>
+    </div>
+
+    <!-- Right side: data freshness + user -->
+    <div class="flex items-center space-x-4">
+      <!-- Data freshness indicator -->
+      <div class="hidden sm:flex items-center text-sm text-gray-500">
+        <span class="inline-block w-2 h-2 rounded-full bg-green-400 mr-1.5 animate-pulse"></span>
+        <span id="last-update" class="text-xs">Live</span>
+      </div>
+
+      <!-- User menu -->
+      {% if user.is_authenticated %}
+        <div class="relative">
+          <a href="{% url 'users:profile' %}" class="flex items-center space-x-2 text-sm text-gray-700 hover:text-gray-900">
+            <span class="inline-flex items-center justify-center h-8 w-8 rounded-full bg-nepal-blue text-white text-xs font-bold">
+              {{ user.username|first|upper }}
+            </span>
+            <span class="hidden sm:block">{{ user.get_short_name|default:user.username }}</span>
+            <span class="hidden sm:block px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-600">{{ user.get_role_display }}</span>
+          </a>
+        </div>
+        <form method="post" action="{% url 'users:logout' %}" class="inline">
+          {% csrf_token %}
+          <button type="submit" class="text-sm text-gray-500 hover:text-gray-700">Sign out</button>
+        </form>
+      {% else %}
+        <a href="{% url 'users:login' %}" class="text-sm font-medium text-nepal-blue hover:text-blue-800">Sign in</a>
+      {% endif %}
+    </div>
+  </div>
+</header>

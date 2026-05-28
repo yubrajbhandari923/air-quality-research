@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ site.name }} — Nepal Air Observatory{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+  <nav class="flex items-center gap-2 text-xs text-slate-400 mb-6">
+    <a href="{% url 'observatory:home' %}" class="hover:text-slate-700">Home</a>
+    <span>/</span>
+    <span class="text-slate-600 font-medium">{{ site.name }}</span>
+  </nav>
+  <div class="mb-8">
+    <h1 class="text-2xl font-bold text-slate-900">{{ site.name }}</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ site.district }}, Nepal
+      {% if site.latitude and site.longitude %} · {{ site.latitude|floatformat:4 }}°N, {{ site.longitude|floatformat:4 }}°E{% endif %}
+    </p>
+  </div>
+  <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
+    {% for pollutant, agg in pollutant_summaries.items %}
+    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div class="text-xs text-slate-400 mb-1">{{ pollutant }} (24h avg)</div>
+      <div class="text-2xl font-bold text-slate-800">{{ agg.avg|floatformat:1 }}</div>
+      <div class="text-xs text-slate-400 mt-0.5">from {{ agg.count }} readings</div>
+    </div>
+    {% endfor %}
+  </div>
+  <h2 class="text-lg font-semibold text-slate-800 mb-4">Sensors at this site</h2>
+  <div class="grid sm:grid-cols-2 gap-4">
+    {% for s in sensors %}
+    <a href="{% url 'observatory:sensor_detail' s.pk %}" class="group bg-white rounded-xl border border-slate-200 hover:border-nao-red hover:shadow-md transition-all p-5">
+      <div class="flex items-start justify-between">
+        <h3 class="font-semibold text-slate-800 group-hover:text-nao-red transition-colors">{{ s.friendly_name }}</h3>
+        <span class="status-badge status-{{ s.status|lower }}">{{ s.get_status_display }}</span>
+      </div>
+      <p class="text-xs text-slate-400 mt-1">{% if s.is_indoor %}🏠 Indoor{% else %}🌿 Outdoor{% endif %} · {{ s.serial_number }}</p>
+      {% with sensor_latest|dict_key:s.pk as pm25data %}
+        {% if pm25data and pm25data.raw_value %}<div class="mt-3 text-lg font-bold text-slate-700">{{ pm25data.raw_value|floatformat:1 }} <span class="text-xs font-normal text-slate-400">µg/m³ PM₂.₅</span></div>{% endif %}
+      {% endwith %}
+    </a>
+    {% endfor %}
+  </div>
+  {% if sensors|length >= 2 %}
+  <div class="mt-6">
+    <a href="{% url 'observatory:indoor_outdoor' site.pk %}" class="btn-secondary">View indoor/outdoor comparison →</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
