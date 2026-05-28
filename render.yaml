@@ -19,17 +19,17 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: nepal-aq-redis
           property: connectionString
       - key: CELERY_BROKER_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: nepal-aq-redis
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
-          type: redis
+          type: keyvalue
           name: nepal-aq-redis
           property: connectionString
       - key: PYTHON_VERSION
@@ -54,26 +54,27 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: nepal-aq-redis
           property: connectionString
       - key: CELERY_BROKER_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: nepal-aq-redis
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
-          type: redis
+          type: keyvalue
           name: nepal-aq-redis
           property: connectionString
+
+  - type: keyvalue
+    name: nepal-aq-redis
+    plan: free
+    ipAllowList: []
 
 databases:
   - name: nepal-aq-db
     plan: free
     databaseName: nepal_aq_db
     user: aq_user
-
-  - type: redis
-    name: nepal-aq-redis
-    plan: free
