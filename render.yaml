@@ -74,6 +74,6 @@ databases:
     databaseName: nepal_aq_db
     user: aq_user
 
-  - type: redis
-    name: nepal-aq-redis
-    plan: free
+  # - type: redis
+  #   name: nepal-aq-redis
+  #   plan: free
