@@ -4,6 +4,7 @@ API views for the Nepal Air Quality Dashboard.
 Endpoints:
   POST /api/v1/readings/             — submit readings (sensor API key)
   GET  /api/v1/readings/             — query readings (researcher+ auth)
+  GET  /api/v1/export/               — CSV/JSON export with access-level controls
   GET  /api/v1/sensors/              — list sensors (public)
   GET  /api/v1/sensors/{id}/         — sensor detail (public)
   POST /api/v1/sensors/register/     — register new sensor (sensor API key)
@@ -12,18 +13,19 @@ Endpoints:
   GET  /api/v1/charts/sensor/{id}/completeness/ — completeness chart data
   GET  /api/v1/charts/national/summary/         — national summary chart
 """
+import csv
+import io
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytz
 from django.db.models import Avg, Count, Max, Min
+from django.http import HttpResponse, StreamingHttpResponse
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 
 from apps.ingestion.converters.api_converter import APIConverter
 from apps.readings.models import CanonicalReading
@@ -396,3 +398,371 @@ class NationalSummaryChartView(APIView):
             },
             "sensors": summary,
         })
+
+
+# ── Diurnal, monthly, I/O, date-range chart endpoints ────────────────────────
+
+class SensorDateRangeView(APIView):
+    """
+    GET /api/v1/charts/sensor/{id}/date-range/?pollutant=PM25
+
+    Returns min/max timestamps for a sensor so the UI can populate date pickers.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, sensor_id):
+        try:
+            sensor = Sensor.objects.get(pk=sensor_id)
+        except Sensor.DoesNotExist:
+            return Response({"error": "Sensor not found."}, status=404)
+
+        pollutant = request.query_params.get("pollutant", "PM25").upper()
+        agg = CanonicalReading.objects.filter(
+            sensor=sensor, pollutant=pollutant, is_duplicate=False,
+        ).aggregate(min_ts=Min("original_ts"), max_ts=Max("original_ts"))
+
+        return Response({
+            "sensor_id": sensor.pk,
+            "pollutant": pollutant,
+            "min_ts": agg["min_ts"].isoformat() if agg["min_ts"] else None,
+            "max_ts": agg["max_ts"].isoformat() if agg["max_ts"] else None,
+            "min_date": agg["min_ts"].date().isoformat() if agg["min_ts"] else None,
+            "max_date": agg["max_ts"].date().isoformat() if agg["max_ts"] else None,
+        })
+
+
+class DiurnalChartView(APIView):
+    """
+    GET /api/v1/charts/sensor/{id}/diurnal/
+
+    Returns hour-of-day (0–23, Nepal Standard Time = UTC+5:45) median PM values
+    for use in diurnal profile charts.
+
+    Query params:
+      pollutant  — PM25 (default)
+      start      — ISO date
+      end        — ISO date
+    """
+    permission_classes = [AllowAny]
+
+    NST_MINUTES = 5 * 60 + 45  # 345 minutes east of UTC
+
+    def get(self, request, sensor_id):
+        from django.db.models import Avg
+        try:
+            sensor = Sensor.objects.get(pk=sensor_id)
+        except Sensor.DoesNotExist:
+            return Response({"error": "Sensor not found."}, status=404)
+
+        pollutant = request.query_params.get("pollutant", "PM25").upper()
+        start = request.query_params.get("start")
+        end = request.query_params.get("end")
+
+        qs = CanonicalReading.objects.filter(
+            sensor=sensor, pollutant=pollutant, is_duplicate=False,
+            quality_flag__in=["GOOD", "UNVALIDATED"],
+        )
+        if start:
+            qs = qs.filter(original_ts__gte=start)
+        if end:
+            qs = qs.filter(original_ts__lte=end)
+        else:
+            qs = qs.filter(original_ts__gte=timezone.now() - timedelta(days=90))
+
+        # Group by NST hour using extra() for SQLite and PostgreSQL compatibility
+        # NST = UTC + 5h45m = +345 minutes
+        rows = (
+            qs.extra(
+                select={"nst_hour": (
+                    "CAST(((CAST(strftime('%%H', original_ts) AS INTEGER) * 60 "
+                    "+ CAST(strftime('%%M', original_ts) AS INTEGER) + 345) / 60) %% 24 AS INTEGER)"
+                )}
+            )
+            .values("nst_hour")
+            .annotate(avg=Avg("raw_value"), count=Count("id"))
+            .order_by("nst_hour")
+        )
+
+        by_hour = {r["nst_hour"]: {"avg": r["avg"], "count": r["count"]} for r in rows}
+        hours = list(range(24))
+
+        return Response({
+            "sensor_id": sensor.pk,
+            "sensor_name": sensor.display_name,
+            "pollutant": pollutant,
+            "hours": hours,
+            "labels": [f"{h:02d}:00" for h in hours],
+            "values": [round(by_hour[h]["avg"], 2) if h in by_hour and by_hour[h]["avg"] else None for h in hours],
+            "counts": [by_hour.get(h, {}).get("count", 0) for h in hours],
+            "note": "Hours in Nepal Standard Time (UTC+5:45). Values are per-hour medians.",
+        })
+
+
+class MonthlyChartView(APIView):
+    """
+    GET /api/v1/charts/sensor/{id}/monthly/
+
+    Returns monthly average + max per pollutant.
+
+    Query params:
+      pollutant  — PM25 (default)
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, sensor_id):
+        from django.db.models import Avg, Max
+        from django.db.models.functions import TruncMonth
+
+        try:
+            sensor = Sensor.objects.get(pk=sensor_id)
+        except Sensor.DoesNotExist:
+            return Response({"error": "Sensor not found."}, status=404)
+
+        pollutant = request.query_params.get("pollutant", "PM25").upper()
+
+        rows = (
+            CanonicalReading.objects
+            .filter(sensor=sensor, pollutant=pollutant, is_duplicate=False,
+                    quality_flag__in=["GOOD", "UNVALIDATED"])
+            .annotate(month=TruncMonth("original_ts"))
+            .values("month")
+            .annotate(avg=Avg("raw_value"), max_val=Max("raw_value"), count=Count("id"))
+            .order_by("month")
+        )
+
+        months = [str(r["month"])[:7] for r in rows]
+        avgs = [round(r["avg"], 1) if r["avg"] else None for r in rows]
+        maxs = [round(r["max_val"], 1) if r["max_val"] else None for r in rows]
+
+        return Response({
+            "sensor_id": sensor.pk,
+            "sensor_name": sensor.display_name,
+            "pollutant": pollutant,
+            "months": months,
+            "avg": avgs,
+            "max": maxs,
+        })
+
+
+class IOComparisonView(APIView):
+    """
+    GET /api/v1/charts/site/{site_id}/io-comparison/
+
+    Returns paired indoor/outdoor diurnal profiles for a site.
+
+    Query params:
+      pollutant  — PM25 (default)
+      start      — ISO date
+      end        — ISO date
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, site_id):
+        from django.db.models import Avg
+        try:
+            site = Site.objects.get(pk=site_id)
+        except Site.DoesNotExist:
+            return Response({"error": "Site not found."}, status=404)
+
+        indoor = Sensor.objects.filter(site=site, is_indoor=True, status="ACTIVE").first()
+        outdoor = Sensor.objects.filter(site=site, is_indoor=False, status="ACTIVE").first()
+
+        if not indoor or not outdoor:
+            return Response({"error": "Site does not have an active indoor+outdoor pair."}, status=404)
+
+        pollutant = request.query_params.get("pollutant", "PM25").upper()
+        start = request.query_params.get("start")
+        end = request.query_params.get("end")
+
+        def diurnal(sensor):
+            qs = CanonicalReading.objects.filter(
+                sensor=sensor, pollutant=pollutant, is_duplicate=False,
+                quality_flag__in=["GOOD", "UNVALIDATED"],
+            )
+            if start:
+                qs = qs.filter(original_ts__gte=start)
+            if end:
+                qs = qs.filter(original_ts__lte=end)
+            else:
+                qs = qs.filter(original_ts__gte=timezone.now() - timedelta(days=90))
+
+            rows = (
+                qs.extra(
+                    select={"nst_hour": (
+                        "CAST(((CAST(strftime('%%H', original_ts) AS INTEGER) * 60 "
+                        "+ CAST(strftime('%%M', original_ts) AS INTEGER) + 345) / 60) %% 24 AS INTEGER)"
+                    )}
+                )
+                .values("nst_hour")
+                .annotate(avg=Avg("raw_value"))
+                .order_by("nst_hour")
+            )
+            by_hour = {r["nst_hour"]: r["avg"] for r in rows}
+            return [round(by_hour[h], 2) if h in by_hour and by_hour[h] else None for h in range(24)]
+
+        hours = list(range(24))
+        labels = [f"{h:02d}:00" for h in hours]
+        outdoor_vals = diurnal(outdoor)
+        indoor_vals = diurnal(indoor)
+
+        # I/O ratio per hour
+        io_ratio = []
+        for i_val, o_val in zip(indoor_vals, outdoor_vals):
+            if i_val and o_val and o_val > 0:
+                io_ratio.append(round(i_val / o_val, 3))
+            else:
+                io_ratio.append(None)
+
+        return Response({
+            "site_id": site.pk,
+            "site_name": site.name,
+            "indoor_sensor": {"id": indoor.pk, "name": indoor.display_name},
+            "outdoor_sensor": {"id": outdoor.pk, "name": outdoor.display_name},
+            "pollutant": pollutant,
+            "labels": labels,
+            "indoor": indoor_vals,
+            "outdoor": outdoor_vals,
+            "io_ratio": io_ratio,
+            "who_24h": 15.0,
+        })
+
+
+# ── CSV / JSON export ─────────────────────────────────────────────────────────
+
+def _get_download_limits(user):
+    """Return (max_rows, days_limit) based on the user's role."""
+    try:
+        from apps.analysis.models import DownloadConfig
+        cfg = DownloadConfig.get()
+    except Exception:
+        # Sensible fallbacks if model not yet migrated
+        class _Cfg:
+            max_rows_public = 500
+            max_rows_researcher = 50000
+            max_rows_admin = 500000
+            public_days_limit = 7
+        cfg = _Cfg()
+
+    if not user or not user.is_authenticated:
+        return cfg.max_rows_public, cfg.public_days_limit
+    role = getattr(user, "role", "PUBLIC")
+    if role in ("ADMIN", "MAINTAINER"):
+        return cfg.max_rows_admin, None
+    if role == "RESEARCHER":
+        return cfg.max_rows_researcher, None
+    return cfg.max_rows_public, cfg.public_days_limit
+
+
+class ExportReadingsView(APIView):
+    """
+    GET /api/v1/export/
+
+    Unified CSV/JSON export endpoint with access-level controls.
+
+    Query params:
+      sensor     — sensor ID (required)
+      pollutant  — PM25, PM10, CO2, TEMP, RH, TVOC (default: PM25)
+      start      — ISO 8601 start (optional; ignored for public users)
+      end        — ISO 8601 end   (optional)
+      quality    — GOOD, SUSPECT, BAD, UNVALIDATED (default: GOOD)
+      format     — csv (default) or json
+
+    Access levels:
+      Unauthenticated / PUBLIC  → max 500 rows, last 7 days only, GOOD quality
+      RESEARCHER                → max 50 000 rows, any date range
+      MAINTAINER / ADMIN        → max 500 000 rows, any date range
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        user = request.user
+        max_rows, days_limit = _get_download_limits(user)
+
+        sensor_id = request.query_params.get("sensor")
+        if not sensor_id:
+            return Response({"error": "sensor parameter is required."}, status=400)
+
+        try:
+            sensor = Sensor.objects.select_related("site").get(pk=sensor_id)
+        except Sensor.DoesNotExist:
+            return Response({"error": "Sensor not found."}, status=404)
+
+        pollutant = request.query_params.get("pollutant", "PM25").upper()
+        quality = request.query_params.get("quality", "GOOD").upper()
+        fmt = request.query_params.get("format", "csv").lower()
+
+        qs = CanonicalReading.objects.filter(
+            sensor=sensor,
+            pollutant=pollutant,
+            is_duplicate=False,
+        ).order_by("original_ts")
+
+        # Apply quality filter
+        if quality == "ALL":
+            pass
+        else:
+            qs = qs.filter(quality_flag=quality)
+
+        # Date range — public users are locked to days_limit window
+        if days_limit is not None:
+            cutoff = timezone.now() - timedelta(days=days_limit)
+            qs = qs.filter(original_ts__gte=cutoff)
+        else:
+            start = request.query_params.get("start")
+            end = request.query_params.get("end")
+            if start:
+                try:
+                    qs = qs.filter(original_ts__gte=start)
+                except (ValueError, TypeError):
+                    return Response({"error": "Invalid start date."}, status=400)
+            if end:
+                try:
+                    qs = qs.filter(original_ts__lte=end)
+                except (ValueError, TypeError):
+                    return Response({"error": "Invalid end date."}, status=400)
+
+        total = qs.count()
+        qs = qs[:max_rows]
+
+        if fmt == "json":
+            data = list(qs.values(
+                "original_ts", "pollutant", "unit", "raw_value", "cleaned_value",
+                "quality_flag", "is_indoor",
+            ))
+            return Response({
+                "sensor_id": sensor.pk,
+                "sensor_name": sensor.display_name,
+                "site": sensor.site.name if sensor.site else None,
+                "pollutant": pollutant,
+                "total_available": total,
+                "returned": len(data),
+                "max_rows": max_rows,
+                "readings": data,
+            })
+
+        # CSV response
+        filename = f"nepal_aq_{sensor.serial_number}_{pollutant}.csv"
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+
+        writer = csv.writer(response)
+        writer.writerow([
+            "timestamp_utc", "sensor_id", "sensor_name", "site",
+            "is_indoor", "pollutant", "unit", "raw_value", "cleaned_value", "quality_flag",
+        ])
+        for r in qs:
+            writer.writerow([
+                r.original_ts.isoformat(),
+                sensor.pk,
+                sensor.display_name,
+                sensor.site.name if sensor.site else "",
+                r.is_indoor,
+                r.pollutant,
+                r.unit or "",
+                r.raw_value,
+                r.cleaned_value,
+                r.quality_flag,
+            ])
+
+        return response

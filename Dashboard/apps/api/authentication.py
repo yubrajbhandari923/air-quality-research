@@ -8,27 +8,24 @@ class APIKeyAuthentication(authentication.BaseAuthentication):
     """
     Authenticate requests using an API key passed in the X-API-Key header.
 
-    If the key is valid, returns (user_or_None, api_key_instance).
-    If the key is invalid/expired, raises AuthenticationFailed.
-    If no key is provided, returns None (allows other auth backends to try).
+    Keys are verified against a PBKDF2 hash — the plain-text key is never
+    stored in the database. Lookup uses the first 8 chars (prefix) as an
+    index, then hash-checks matching candidates.
     """
 
     def authenticate(self, request):
-        key = request.META.get("HTTP_X_API_KEY") or request.GET.get("api_key")
-        if not key:
-            return None  # No API key — try next auth backend
+        raw_key = request.META.get("HTTP_X_API_KEY") or request.GET.get("api_key")
+        if not raw_key:
+            return None  # no key provided — try next auth backend
 
-        try:
-            api_key = APIKey.objects.select_related("user").get(key=key)
-        except APIKey.DoesNotExist:
+        api_key = APIKey.verify(raw_key)
+        if api_key is None:
             raise exceptions.AuthenticationFailed("Invalid API key.")
 
         if not api_key.is_valid:
             raise exceptions.AuthenticationFailed("API key is inactive or expired.")
 
         api_key.touch()
-
-        # Return (user, auth) — user may be None for sensor keys
         return (api_key.user, api_key)
 
     def authenticate_header(self, request):

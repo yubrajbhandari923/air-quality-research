@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "django_celery_beat",
     "django_celery_results",
+    "axes",
     # Local apps
     "apps.core",
     "apps.users",
@@ -50,6 +51,7 @@ INSTALLED_APPS = [
     "apps.dashboard",
     "apps.exposure",
     "apps.documents",
+    "apps.analysis",
 ]
 
 MIDDLEWARE = [
@@ -60,6 +62,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "axes.middleware.AxesMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -115,6 +118,19 @@ AUTH_PASSWORD_VALIDATORS = [
 LOGIN_URL = "/users/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
+
+AUTHENTICATION_BACKENDS = [
+    "axes.backends.AxesStandaloneBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
+# ── django-axes (brute-force login protection) ─────────────────────────────────
+AXES_FAILURE_LIMIT = 5          # lock after 5 failed attempts
+AXES_COOLOFF_TIME = 1           # lock for 1 hour
+AXES_LOCKOUT_PARAMETERS = ["ip_address", "username"]  # lock per IP+username combo
+AXES_RESET_ON_SUCCESS = True    # clear failure count on successful login
+AXES_ENABLE_ADMIN = True        # show lockout records in Django admin
+AXES_VERBOSE = False
 
 # ── Internationalization ──────────────────────────────────────────────────────
 LANGUAGE_CODE = "en-us"

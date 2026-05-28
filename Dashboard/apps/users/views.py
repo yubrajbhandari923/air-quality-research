@@ -19,11 +19,11 @@ class LoginView(View):
     def get(self, request):
         if request.user.is_authenticated:
             return redirect("observatory:home")
-        form = AuthenticationForm()
+        form = AuthenticationForm(request)
         return render(request, self.template_name, {"form": form})
 
     def post(self, request):
-        form = AuthenticationForm(data=request.POST)
+        form = AuthenticationForm(request, data=request.POST)
         if form.is_valid():
             user = form.get_user()
             login(request, user)

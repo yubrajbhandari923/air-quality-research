@@ -34,6 +34,9 @@ python-dateutil==2.9.0.post0
 django-cors-headers==4.6.0
 whitenoise==6.8.2
 
+# Security
+django-axes==8.3.1
+
 # Dev / Testing
 factory-boy==3.3.1
 faker==33.1.0

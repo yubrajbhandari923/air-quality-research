@@ -25,9 +25,10 @@ observatory_patterns = [
 
 # ── Portal namespace ──────────────────────────────────────────────────────────
 portal_patterns = [
-    path("",                views.PortalIndexView.as_view(),    name="index"),
-    path("ingestion-logs/", views.IngestionLogsView.as_view(),  name="ingestion_logs"),
-    path("upload-csv/",     views.UploadCSVView.as_view(),      name="upload_csv"),
-    path("api-keys/",       views.APIKeysView.as_view(),        name="api_keys"),
-    path("run-ingestion/",  views.RunIngestionView.as_view(),   name="run_ingestion"),
+    path("",                              views.PortalIndexView.as_view(),       name="index"),
+    path("ingestion-logs/",               views.IngestionLogsView.as_view(),     name="ingestion_logs"),
+    path("upload-csv/",                   views.UploadCSVView.as_view(),         name="upload_csv"),
+    path("api-keys/",                     views.APIKeysView.as_view(),           name="api_keys"),
+    path("run-ingestion/",                views.RunIngestionView.as_view(),      name="run_ingestion"),
+    path("analysis/run/<int:pk>/",        views.RunAnalysisScriptView.as_view(), name="run_analysis"),
 ]

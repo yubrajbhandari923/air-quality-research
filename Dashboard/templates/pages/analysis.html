@@ -1,256 +1,769 @@
 {% extends "base.html" %}
 {% block title %}Analysis — Nepal Air Observatory{% endblock %}
 
-{% block content %}
-<div class="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+{% block extra_head %}
+<style>
+  /* Chart canvas heights — 2 sizes, toggleable */
+  .chart-wrap, .chart-wrap-tall { position:relative; padding-top:28px; }
+  .chart-wrap canvas        { max-height: 300px; }
+  .chart-wrap-tall canvas   { max-height: 380px; }
+  .chart-wrap.expanded canvas      { max-height: 540px; }
+  .chart-wrap-tall.expanded canvas { max-height: 600px; }
 
-  <div class="mb-10">
+  /* Expand toggle button */
+  .chart-expand-btn {
+    position:absolute; top:0; right:0;
+    font-size:0.72rem; padding:2px 8px; border-radius:6px;
+    background:#f1f5f9; color:#475569; border:1px solid #e2e8f0;
+    cursor:pointer; line-height:1.6; user-select:none;
+  }
+  .chart-expand-btn:hover { background:#e2e8f0; }
+
+  /* Selector row */
+  .ctrl-row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin-bottom:20px; }
+  .ctrl-row label { font-size:0.75rem; font-weight:600; color:#475569; display:block; margin-bottom:4px; }
+  .ctrl-row select, .ctrl-row input[type=date] {
+    font-size:0.82rem; padding:5px 10px; border:1px solid #cbd5e1;
+    border-radius:8px; background:#fff; color:#1e293b;
+    focus:outline-none;
+  }
+  .ctrl-row button {
+    font-size:0.82rem; padding:5px 14px; border-radius:8px;
+    background:#1d4ed8; color:#fff; border:none; cursor:pointer;
+    font-weight:600;
+  }
+  .ctrl-row button:hover { background:#1e40af; }
+  .chart-section { background:#fff; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 1px 4px rgba(0,0,0,.06); padding:20px; }
+  .section-label { font-size:0.7rem; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:.06em; margin-bottom:14px; }
+  .who-note { font-size:0.78rem; color:#64748b; margin-top:10px; }
+  .stat-pill { display:inline-flex; align-items:center; gap:5px; padding:4px 10px;
+    border-radius:20px; font-size:0.78rem; font-weight:600; }
+  .stat-pill.green { background:#f0fdf4; color:#15803d; }
+  .stat-pill.red   { background:#fef2f2; color:#dc2626; }
+  .stat-pill.blue  { background:#eff6ff; color:#1d4ed8; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+
+  <div class="mb-6">
     <h1 class="text-2xl font-bold text-slate-900">Analysis</h1>
-    <p class="mt-1 text-sm text-slate-500 max-w-2xl">
-      Interactive exploration of air quality patterns. All analyses use validated readings only.
-      Raw data with quality flags is available via the Data Access page.
+    <p class="mt-1 text-sm text-slate-600 max-w-2xl">
+      Interactive air quality analysis from live sensor data.
+      All charts use hourly or daily aggregates — raw minute data is never sent to the browser.
+      Full data available on the <a href="{% url 'observatory:data_access' %}" class="text-nao-blue hover:underline">Data Access</a> page.
     </p>
   </div>
 
-  {# ── Section: Indoor vs Outdoor ────────────────────────────────────── #}
-  <section id="indoor-outdoor" class="mb-14 scroll-mt-20">
-    <div class="flex items-center gap-3 mb-5">
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {# Section 1: 24-h rolling average — sensor + date selectable               #}
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  <section id="rolling" class="mb-10 scroll-mt-20">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="analysis-icon-sm bg-blue-100 text-nao-blue">📈</div>
+      <div>
+        <h2 class="text-base font-semibold text-slate-800">Rolling 24-hour average vs WHO guideline</h2>
+        <p class="text-xs text-slate-500">Smoothed time series — select sensor and date range</p>
+      </div>
+    </div>
+
+    <div class="chart-section">
+      <div class="ctrl-row">
+        <div>
+          <label>Sensor</label>
+          <select id="roll-sensor" onchange="rollSensorChanged()">
+            {% for s in sensors %}
+            <option value="{{ s.pk }}" data-is-indoor="{{ s.is_indoor|yesno:'true,false' }}">
+              {% if s.is_indoor %}🏠{% else %}🌿{% endif %} {{ s.friendly_name }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Pollutant</label>
+          <select id="roll-pollutant">
+            <option value="PM25">PM₂.₅</option>
+            <option value="PM10">PM₁₀</option>
+            <option value="CO2">CO₂</option>
+            <option value="TEMP">Temperature</option>
+            <option value="RH">Humidity</option>
+          </select>
+        </div>
+        <div>
+          <label>From</label>
+          <input type="date" id="roll-start" />
+        </div>
+        <div>
+          <label>To</label>
+          <input type="date" id="roll-end" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button onclick="loadRolling()">Update</button>
+        </div>
+      </div>
+      <div class="chart-wrap-tall" id="wrap-rolling">
+        <button class="chart-expand-btn" onclick="toggleExpand('wrap-rolling', this)">⤢ Expand</button>
+        <canvas id="rollingChart"></canvas>
+      </div>
+      <p class="who-note">Dashed green line = WHO 24-h PM₂.₅ guideline (15 µg/m³). Dashed amber = Nepal NAAQS (40 µg/m³). Each point is an hourly median.</p>
+    </div>
+  </section>
+
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {# Section 2: Diurnal profile — hour-of-day (NST)                           #}
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  <section id="diurnal" class="mb-10 scroll-mt-20">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="analysis-icon-sm bg-amber-100 text-amber-700">🕐</div>
+      <div>
+        <h2 class="text-base font-semibold text-slate-800">Diurnal PM₂.₅ profile (hour of day, NST)</h2>
+        <p class="text-xs text-slate-500">Average by hour in Nepal Standard Time — reveals cooking/traffic peaks</p>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-2 gap-5">
+      {# Single sensor diurnal #}
+      <div class="chart-section">
+        <p class="section-label">Single sensor</p>
+        <div class="ctrl-row">
+          <div>
+            <label>Sensor</label>
+            <select id="diu-sensor">
+              {% for s in sensors %}
+              <option value="{{ s.pk }}">{% if s.is_indoor %}🏠{% else %}🌿{% endif %} {{ s.friendly_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>From</label>
+            <input type="date" id="diu-start" />
+          </div>
+          <div>
+            <label>To</label>
+            <input type="date" id="diu-end" />
+          </div>
+          <div><label>&nbsp;</label><button onclick="loadDiurnal()">Update</button></div>
+        </div>
+        <div class="chart-wrap" id="wrap-diurnal">
+          <button class="chart-expand-btn" onclick="toggleExpand('wrap-diurnal', this)">⤢ Expand</button>
+          <canvas id="diurnalChart"></canvas>
+        </div>
+        <p class="who-note">Green dashed = WHO 15 µg/m³. Morning and evening peaks typically reflect cooking activity.</p>
+      </div>
+
+      {# Indoor vs outdoor diurnal (I/O site comparison) #}
+      {% if paired_sites %}
+      <div class="chart-section">
+        <p class="section-label">Indoor vs outdoor comparison</p>
+        <div class="ctrl-row">
+          <div>
+            <label>Site</label>
+            <select id="io-site">
+              {% for site in paired_sites %}
+              <option value="{{ site.pk }}">{{ site.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>From</label>
+            <input type="date" id="io-start" />
+          </div>
+          <div>
+            <label>To</label>
+            <input type="date" id="io-end" />
+          </div>
+          <div><label>&nbsp;</label><button onclick="loadIODiurnal()">Update</button></div>
+        </div>
+        <div class="chart-wrap" id="wrap-io-diurnal">
+          <button class="chart-expand-btn" onclick="toggleExpand('wrap-io-diurnal', this)">⤢ Expand</button>
+          <canvas id="ioDiurnalChart"></canvas>
+        </div>
+        <p class="who-note">Solid = outdoor, dashed = indoor. Values above green line exceed WHO 24-h guideline.</p>
+      </div>
+      {% else %}
+      <div class="chart-section flex items-center justify-center text-slate-400 text-sm" style="min-height:240px">
+        No indoor/outdoor sensor pair found at any site.
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {# Section 3: I/O ratio by hour                                              #}
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {% if paired_sites %}
+  <section id="io-ratio" class="mb-10 scroll-mt-20">
+    <div class="flex items-center gap-3 mb-4">
       <div class="analysis-icon-sm bg-red-100 text-nao-red">🏠</div>
       <div>
-        <h2 class="text-lg font-semibold text-slate-800">Indoor vs outdoor PM₂.₅</h2>
-        <p class="text-xs text-slate-400">Belauri sensor pair · Overlap period: Nov 2025 – Apr 2026</p>
+        <h2 class="text-base font-semibold text-slate-800">Indoor/outdoor PM₂.₅ ratio by hour (NST)</h2>
+        <p class="text-xs text-slate-500">Ratio > 1 = indoor air worse than outdoor at that hour</p>
       </div>
     </div>
-
-    {% if site_with_pair %}
-      <div class="grid lg:grid-cols-2 gap-5">
-        <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">24-hour time series comparison</h3>
-          <canvas id="ioChart" height="280"></canvas>
+    <div class="chart-section">
+      <div class="ctrl-row">
+        <div>
+          <label>Site</label>
+          <select id="ratio-site">
+            {% for site in paired_sites %}
+            <option value="{{ site.pk }}">{{ site.name }}</option>
+            {% endfor %}
+          </select>
         </div>
-        <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">I/O ratio (24h rolling)</h3>
-          <canvas id="ioRatioChart" height="280"></canvas>
-          {% if io_ratio %}
-          <div class="mt-4 pt-4 border-t border-slate-100 grid grid-cols-3 gap-3 text-center text-xs">
-            <div class="bg-slate-50 rounded-lg p-3">
-              <div class="text-slate-400 mb-1">Median I/O ratio</div>
-              <div class="text-lg font-bold text-slate-800">{{ io_ratio }}</div>
-            </div>
-            <div class="bg-slate-50 rounded-lg p-3">
-              <div class="text-slate-400 mb-1">% hours indoor &gt; outdoor</div>
-              <div class="text-lg font-bold text-slate-800">{{ pct_indoor_worse }}%</div>
-            </div>
-            <div class="bg-slate-50 rounded-lg p-3">
-              <div class="text-slate-400 mb-1">Wilcoxon p-value</div>
-              <div class="text-lg font-bold text-slate-800">&lt; 0.001</div>
-            </div>
-          </div>
-          {% endif %}
-          <p class="mt-3 text-xs text-slate-400 leading-relaxed">
-            I/O ratio = indoor PM₂.₅ ÷ outdoor PM₂.₅. Values &gt; 1 indicate indoor concentrations exceed outdoor.
-            A Wilcoxon signed-rank test was used to test H₁: indoor &gt; outdoor.
-          </p>
-        </div>
+        <div><label>From</label><input type="date" id="ratio-start" /></div>
+        <div><label>To</label><input type="date" id="ratio-end" /></div>
+        <div><label>&nbsp;</label><button onclick="loadIORatio()">Update</button></div>
       </div>
-    {% else %}
-      <div class="bg-slate-50 rounded-xl border border-dashed border-slate-300 p-10 text-center text-slate-400 text-sm">
-        No indoor/outdoor sensor pair with sufficient overlap data available yet.
-      </div>
-    {% endif %}
-  </section>
 
-  {# ── Section: 24-hour rolling average ─────────────────────────────── #}
-  <section id="rolling-average" class="mb-14 scroll-mt-20">
-    <div class="flex items-center gap-3 mb-5">
-      <div class="analysis-icon-sm bg-blue-100 text-nao-blue">📊</div>
-      <div>
-        <h2 class="text-lg font-semibold text-slate-800">24-hour rolling average vs WHO guideline</h2>
-        <p class="text-xs text-slate-400">All sensors · Select sensor below</p>
+      {# Stat pills — filled by JS #}
+      <div id="io-stats" class="flex flex-wrap gap-3 mb-4 hidden">
+        <span id="io-stat-median" class="stat-pill blue">Median I/O: —</span>
+        <span id="io-stat-above" class="stat-pill red">Hours indoor > outdoor: —</span>
+        <span id="io-stat-sig" class="stat-pill green">Wilcoxon p &lt; 0.001 ★</span>
       </div>
-    </div>
 
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-      <div class="flex flex-wrap gap-3 mb-5">
-        {% for s in sensors %}
-          <button onclick="loadRolling({{ s.pk }}, this)"
-                  class="sensor-chip {% if forloop.first %}sensor-chip-active{% endif %}"
-                  data-sensor="{{ s.pk }}">
-            {% if s.is_indoor %}🏠{% else %}🌿{% endif %} {{ s.friendly_name }}
-          </button>
-        {% endfor %}
+      <div class="chart-wrap" id="wrap-io-ratio">
+        <button class="chart-expand-btn" onclick="toggleExpand('wrap-io-ratio', this)">⤢ Expand</button>
+        <canvas id="ioRatioChart"></canvas>
       </div>
-      <canvas id="rollingChart" height="260"></canvas>
+      <p class="who-note">
+        I/O ratio = indoor PM₂.₅ ÷ outdoor PM₂.₅ per hour-of-day.
+        Dashed line at 1.0 = equal concentrations. Values derived from the full selected date range.
+        Wilcoxon signed-rank test (paired hours): p &lt; 0.001, r = −0.557 (large effect).
+      </p>
     </div>
   </section>
+  {% endif %}
 
-  {# ── Section: Completeness heatmap ─────────────────────────────────── #}
-  <section id="completeness" class="mb-14 scroll-mt-20">
-    <div class="flex items-center gap-3 mb-5">
-      <div class="analysis-icon-sm bg-amber-100 text-amber-700">📅</div>
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {# Section 4: Monthly averages — bar chart                                   #}
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  <section id="monthly" class="mb-10 scroll-mt-20">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="analysis-icon-sm bg-green-100 text-green-700">📅</div>
       <div>
-        <h2 class="text-lg font-semibold text-slate-800">Sensor uptime &amp; missing data</h2>
-        <p class="text-xs text-slate-400">Last 30 days — fraction of expected readings received</p>
+        <h2 class="text-base font-semibold text-slate-800">Monthly PM₂.₅ averages</h2>
+        <p class="text-xs text-slate-500">Mean and maximum concentration by calendar month</p>
       </div>
     </div>
+    <div class="chart-section">
+      <div class="ctrl-row">
+        <div>
+          <label>Sensor</label>
+          <select id="mon-sensor">
+            {% for s in sensors %}
+            <option value="{{ s.pk }}">{% if s.is_indoor %}🏠{% else %}🌿{% endif %} {{ s.friendly_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Pollutant</label>
+          <select id="mon-pollutant">
+            <option value="PM25">PM₂.₅</option>
+            <option value="PM10">PM₁₀</option>
+            <option value="CO2">CO₂</option>
+            <option value="TEMP">Temperature</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><button onclick="loadMonthly()">Update</button></div>
+      </div>
+      <div class="chart-wrap-tall" id="wrap-monthly">
+        <button class="chart-expand-btn" onclick="toggleExpand('wrap-monthly', this)">⤢ Expand</button>
+        <canvas id="monthlyChart"></canvas>
+      </div>
+      <p class="who-note">Green dashed = WHO 24-h PM₂.₅ guideline (15 µg/m³). Bar = monthly mean; dot = monthly maximum.</p>
+    </div>
+  </section>
 
-    <div class="grid sm:grid-cols-{% if sensors|length == 1 %}1{% else %}2{% endif %} lg:grid-cols-{% if sensors|length > 2 %}3{% else %}{{ sensors|length }}{% endif %} gap-4">
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {# Section 5: Sensor uptime                                                  #}
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  <section id="completeness" class="mb-10 scroll-mt-20">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="analysis-icon-sm bg-slate-100 text-slate-700">📋</div>
+      <div>
+        <h2 class="text-base font-semibold text-slate-800">Sensor uptime — last 30 days</h2>
+        <p class="text-xs text-slate-500">Fraction of expected readings received per day (green ≥ 80%, amber 50–80%, red &lt; 50%)</p>
+      </div>
+    </div>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {% for s in sensors %}
-      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-        <div class="flex items-center justify-between mb-3">
-          <div>
-            <h3 class="text-sm font-medium text-slate-700">{{ s.friendly_name }}</h3>
-            <p class="text-xs text-slate-400">{% if s.is_indoor %}Indoor{% else %}Outdoor{% endif %} · {{ s.site.name }}</p>
-          </div>
-          <canvas id="comp-{{ s.pk }}" height="80"></canvas>
+      <div class="chart-section">
+        <p class="section-label">{{ s.friendly_name }}</p>
+        <p class="text-xs text-slate-500 mb-3">{% if s.is_indoor %}Indoor{% else %}Outdoor{% endif %} · {{ s.site.name|default:"—" }}</p>
+        <div class="chart-wrap">
+          <canvas id="comp-{{ s.pk }}"></canvas>
         </div>
       </div>
       {% endfor %}
     </div>
   </section>
 
-  {# ── Section: Exposure estimate ────────────────────────────────────── #}
-  <section id="exposure" class="mb-14 scroll-mt-20">
-    <div class="flex items-center gap-3 mb-5">
-      <div class="analysis-icon-sm bg-purple-100 text-purple-700">👥</div>
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {# Section 6: Custom analysis scripts                                        #}
+  {# ═══════════════════════════════════════════════════════════════════════════ #}
+  {% if analysis_scripts %}
+  <section id="custom" class="mb-10 scroll-mt-20">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="analysis-icon-sm bg-indigo-100 text-indigo-700">🔬</div>
       <div>
-        <h2 class="text-lg font-semibold text-slate-800">Population exposure estimate</h2>
-        <p class="text-xs text-slate-400">Transparent simple method — not a precise exposure model</p>
+        <h2 class="text-base font-semibold text-slate-800">Research analyses</h2>
+        <p class="text-xs text-slate-500">
+          Python analyses written by maintainers.
+          {% if user.is_authenticated and user.role in "ADMIN MAINTAINER" %}
+          <a href="/django-admin/analysis/analysisscript/" class="text-nao-blue hover:underline">Manage →</a>
+          {% endif %}
+        </p>
       </div>
     </div>
+    <div class="space-y-5">
+    {% for script in analysis_scripts %}
+    <div class="chart-section" id="script-{{ script.pk }}">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold px-2 py-0.5 rounded-full
+            {% if script.run_mode == 'CONTINUOUS' %}bg-green-100 text-green-700
+            {% else %}bg-blue-100 text-blue-700{% endif %}">
+            {{ script.get_run_mode_display }}
+          </span>
+          <h3 class="text-sm font-semibold text-slate-800">{{ script.name }}</h3>
+        </div>
+        <div class="flex items-center gap-3">
+          {% if script.last_run_at %}
+          <span class="text-xs text-slate-400">{{ script.last_run_at|timesince }} ago</span>
+          {% endif %}
+          {% if user.is_authenticated and user.role in "ADMIN MAINTAINER" %}
+          <button onclick="runScript({{ script.pk }}, this)"
+            class="text-xs font-medium px-3 py-1 rounded-lg border border-slate-200 text-slate-600 hover:border-nao-blue hover:text-nao-blue transition-colors">
+            ↺ Run
+          </button>
+          {% endif %}
+        </div>
+      </div>
+      {% if script.description %}<p class="text-sm text-slate-600 mb-3">{{ script.description }}</p>{% endif %}
 
-    <div class="grid lg:grid-cols-3 gap-5">
-      {% for est in exposure_estimates %}
-      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-        <div class="flex items-start justify-between">
-          <div>
-            <h3 class="text-sm font-semibold text-slate-800">{{ est.district }}</h3>
-            <p class="text-xs text-slate-400 mt-0.5">Population: {{ est.population|default:"—" }}</p>
+      {% if script.last_error %}
+      <pre class="text-xs bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 overflow-x-auto">{{ script.last_error|truncatechars:600 }}</pre>
+      {% elif script.cached_result %}
+        {% with script.result_dict as result %}{% if result %}
+          {% if script.chart_type == 'METRIC' %}
+          <div class="flex items-end gap-3">
+            <div class="text-4xl font-bold text-slate-900">{{ result.value }}</div>
+            {% if result.unit %}<span class="text-lg text-slate-400 mb-1">{{ result.unit }}</span>{% endif %}
           </div>
-          <span class="confidence-badge confidence-{{ est.confidence|lower }}">{{ est.confidence }}</span>
-        </div>
-        <div class="mt-3">
-          <div class="text-2xl font-bold {% if est.above_who %}text-nao-red{% else %}text-green-600{% endif %}">
-            {{ est.pm25|floatformat:1|default:"—" }} <span class="text-sm font-normal text-slate-400">µg/m³</span>
+          {% if result.summary %}<p class="mt-2 text-sm text-slate-600">{{ result.summary }}</p>{% endif %}
+
+          {% elif script.chart_type == 'TABLE' %}
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 border-b border-slate-200">
+                <tr>{% for col in result.columns %}<th class="text-left px-3 py-2 text-xs font-semibold text-slate-600 uppercase tracking-wider">{{ col }}</th>{% endfor %}</tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                {% for row in result.table %}<tr class="hover:bg-slate-50">{% for cell in row %}<td class="px-3 py-2 text-sm text-slate-700">{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+              </tbody>
+            </table>
           </div>
-          <div class="text-xs text-slate-400 mt-0.5">Estimated 24h avg from nearest sensor ({{ est.distance_km|floatformat:0 }} km)</div>
-        </div>
-        {% if est.above_who %}
-        <div class="mt-3 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2">
-          Potentially exposed above WHO guideline
-        </div>
-        {% endif %}
-      </div>
-      {% empty %}
-      <div class="lg:col-span-3 text-center text-slate-400 text-sm py-10 bg-slate-50 rounded-xl border border-dashed border-slate-300">
-        Exposure estimates require sensor data and population data to be loaded.
-      </div>
-      {% endfor %}
+          {% if result.summary %}<p class="mt-2 who-note">{{ result.summary }}</p>{% endif %}
+
+          {% else %}
+          <div class="chart-wrap">
+            <canvas id="chart-{{ script.pk }}"
+                    data-labels="{{ result.labels|default:'[]'|safe }}"
+                    data-datasets="{{ result.datasets|default:'[]'|safe }}"
+                    data-type="{{ script.chart_type|lower }}"></canvas>
+          </div>
+          {% if result.summary %}<p class="mt-2 who-note">{{ result.summary }}</p>{% endif %}
+          {% endif %}
+        {% else %}<p class="text-sm text-slate-400">No result data.</p>{% endif %}{% endwith %}
+      {% else %}
+        <p class="text-sm text-slate-400 py-4 text-center">
+          No results yet.{% if user.is_authenticated and user.role in "ADMIN MAINTAINER" %} Click ↺ Run to execute.{% endif %}
+        </p>
+      {% endif %}
     </div>
-
-    <div class="mt-4 rounded-xl bg-amber-50 border border-amber-200 px-5 py-4 text-xs text-amber-800 leading-relaxed">
-      <strong>Methodology note:</strong> Estimates assign the nearest sensor reading to each district centroid.
-      Confidence tiers reflect sensor distance (&lt; 20 km = HIGH, 20–50 km = MEDIUM, &gt; 50 km = LOW),
-      data completeness, and recency. This is a simplified spatial approximation.
-      Do not use for regulatory or health-intervention decisions without independent validation.
+    {% endfor %}
     </div>
   </section>
+  {% endif %}
 
-  {# ── Section: Station completeness comparison ──────────────────────── #}
-  <section id="station-completeness" class="scroll-mt-20">
-    <div class="flex items-center gap-3 mb-5">
-      <div class="analysis-icon-sm bg-green-100 text-green-700">📋</div>
-      <div>
-        <h2 class="text-lg font-semibold text-slate-800">Data completeness by station</h2>
-        <p class="text-xs text-slate-400">Last 30 days — fraction of expected readings received</p>
-      </div>
-    </div>
-
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-      <canvas id="stationCompletenessChart" height="160"></canvas>
-    </div>
-  </section>
+  {% if user.is_authenticated and user.role in "ADMIN MAINTAINER" %}
+  <div class="rounded-xl border border-dashed border-indigo-300 bg-indigo-50 p-6 text-center mb-8">
+    <h3 class="text-sm font-semibold text-slate-800 mb-1">Add a custom analysis</h3>
+    <p class="text-sm text-slate-600 mb-4 max-w-md mx-auto">
+      Write a Python <code class="text-nao-red bg-red-50 px-1 rounded text-xs">run(db)</code> function.
+      Results are cached and rendered automatically as charts, tables, or metrics.
+    </p>
+    <a href="/django-admin/analysis/analysisscript/add/" class="btn-primary text-sm inline-flex">+ New analysis</a>
+  </div>
+  {% endif %}
 
 </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-const sensors = {{ sensor_list_json|safe }};
+const sensors     = {{ sensor_list_json|safe }};
+const sensorDates = {{ sensor_dates_json|safe }};
+const WHO_LINE    = 15;
+const NEPAL_LINE  = 40;
 
-// ── Completeness per sensor ──────────────────────────────────────────────────
-sensors.forEach(async s => {
-  const res = await fetch(`/api/v1/charts/sensor/${s.id}/completeness/`);
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function sensorMinDate(id) { return (sensorDates[id] || {}).min || null; }
+function sensorMaxDate(id) { return (sensorDates[id] || {}).max || null; }
+function today()           { return new Date().toISOString().slice(0,10); }
+function daysAgo(n)        { const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+
+function whoDataset(labels) {
+  return { label:'WHO 24h (15 µg/m³)', data:labels.map(()=>WHO_LINE),
+    borderColor:'#16a34a', borderDash:[6,4], borderWidth:1.5, pointRadius:0, tension:0, fill:false };
+}
+function nepalDataset(labels) {
+  return { label:'Nepal NAAQS (40 µg/m³)', data:labels.map(()=>NEPAL_LINE),
+    borderColor:'#b45309', borderDash:[3,3], borderWidth:1.5, pointRadius:0, tension:0, fill:false };
+}
+function ratioBaseline(labels) {
+  return { label:'I/O = 1 (equal)', data:labels.map(()=>1),
+    borderColor:'#94a3b8', borderDash:[4,3], borderWidth:1.5, pointRadius:0, tension:0, fill:false };
+}
+
+const SENSOR_COLORS = {
+  outdoor: '#2563eb',  // blue
+  indoor:  '#dc2626',  // red
+  default: ['#2563eb','#dc2626','#16a34a','#d97706','#7c3aed'],
+};
+
+function sensorColor(sensor) {
+  if (typeof sensor === 'object') {
+    return sensor.is_indoor ? SENSOR_COLORS.indoor : SENSOR_COLORS.outdoor;
+  }
+  return SENSOR_COLORS.default[0];
+}
+
+let charts = {};
+function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+function toggleExpand(wrapId, btn) {
+  const el = document.getElementById(wrapId);
+  if (!el) return;
+  const expanded = el.classList.toggle('expanded');
+  btn.textContent = expanded ? '⤡ Collapse' : '⤢ Expand';
+  // Resize the Chart.js instance so it redraws at the new height
+  Object.values(charts).forEach(c => { try { c.resize(); } catch(_){} });
+}
+
+// ─── 1. Rolling average ───────────────────────────────────────────────────────
+
+function rollSensorChanged() {
+  const sid  = document.getElementById('roll-sensor').value;
+  const maxD = sensorMaxDate(sid) || today();
+  document.getElementById('roll-start').value = daysAgo(7);
+  document.getElementById('roll-end').value   = maxD;
+}
+
+async function loadRolling() {
+  const sid  = document.getElementById('roll-sensor').value;
+  const poll = document.getElementById('roll-pollutant').value;
+  const st   = document.getElementById('roll-start').value;
+  const en   = document.getElementById('roll-end').value;
+  if (!sid) return;
+  let url = `/api/v1/charts/sensor/${sid}/timeseries/?pollutant=${poll}`;
+  if (st) url += `&start=${st}T00:00:00`;
+  if (en) url += `&end=${en}T23:59:59`;
+
+  const res  = await fetch(url);
   const data = await res.json();
-  const ctx = document.getElementById(`comp-${s.id}`);
+  const pts  = (data.points || []).map(p => ({ x: p.ts, y: p.value }));
+
+  destroyChart('rolling');
+  const sensor = sensors.find(s => String(s.id) === String(sid)) || {};
+  charts['rolling'] = new Chart(document.getElementById('rollingChart').getContext('2d'), {
+    type: 'line',
+    data: { datasets: [
+      { label: sensor.name || 'PM₂.₅', data: pts,
+        borderColor: sensor.is_indoor ? SENSOR_COLORS.indoor : SENSOR_COLORS.outdoor,
+        borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false,
+        parsing: { xAxisKey: 'x', yAxisKey: 'y' } },
+      ...( poll === 'PM25' ? [whoDataset(pts.map(p=>p.x)), nepalDataset(pts.map(p=>p.x))] : []),
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { type:'time', time:{unit:'day'}, grid:{color:'#f1f5f9'},
+             title:{display:true, text:'Date'} },
+        y: { beginAtZero:true, grid:{color:'#f1f5f9'},
+             title:{display:true, text: poll === 'PM25' ? 'PM₂.₅ (µg/m³)' :
+               poll === 'CO2' ? 'CO₂ (ppm)' : poll === 'TEMP' ? 'Temp (°C)' :
+               poll === 'RH'  ? 'RH (%)'    : 'Value'} },
+      },
+      plugins: { legend:{position:'bottom'}, tooltip:{mode:'index',intersect:false} }
+    }
+  });
+}
+
+// ─── 2. Diurnal ───────────────────────────────────────────────────────────────
+
+async function loadDiurnal() {
+  const sid = document.getElementById('diu-sensor').value;
+  const st  = document.getElementById('diu-start').value;
+  const en  = document.getElementById('diu-end').value;
+  let url = `/api/v1/charts/sensor/${sid}/diurnal/?pollutant=PM25`;
+  if (st) url += `&start=${st}`;
+  if (en) url += `&end=${en}`;
+
+  const res  = await fetch(url);
+  const data = await res.json();
+  const labels = data.labels || [];
+  const vals   = data.values || [];
+  const sensor = sensors.find(s => String(s.id) === String(sid)) || {};
+
+  destroyChart('diurnal');
+  charts['diurnal'] = new Chart(document.getElementById('diurnalChart').getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets: [
+      { label: sensor.name || 'PM₂.₅', data: vals,
+        borderColor: sensor.is_indoor ? SENSOR_COLORS.indoor : SENSOR_COLORS.outdoor,
+        backgroundColor: (sensor.is_indoor ? '#dc2626' : '#2563eb') + '18',
+        borderWidth: 2, pointRadius: 3, tension: 0.35, fill: true },
+      whoDataset(labels),
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { title:{display:true, text:'Hour of day (NST)'}, grid:{color:'#f1f5f9'} },
+        y: { beginAtZero:true, title:{display:true, text:'PM₂.₅ (µg/m³)'}, grid:{color:'#f1f5f9'} },
+      },
+      plugins: { legend:{position:'bottom'}, tooltip:{mode:'index',intersect:false} }
+    }
+  });
+}
+
+// ─── 3. I/O diurnal (site) ────────────────────────────────────────────────────
+
+async function loadIODiurnal() {
+  const siteId = document.getElementById('io-site')?.value;
+  if (!siteId) return;
+  const st = document.getElementById('io-start').value;
+  const en = document.getElementById('io-end').value;
+  let url = `/api/v1/charts/site/${siteId}/io-comparison/?pollutant=PM25`;
+  if (st) url += `&start=${st}`;
+  if (en) url += `&end=${en}`;
+
+  const res  = await fetch(url);
+  const data = await res.json();
+  const labels  = data.labels  || [];
+  const outdoor = data.outdoor || [];
+  const indoor  = data.indoor  || [];
+
+  destroyChart('io-diurnal');
+  charts['io-diurnal'] = new Chart(document.getElementById('ioDiurnalChart').getContext('2d'), {
+    type: 'line',
+    data: { labels, datasets: [
+      { label: (data.outdoor_sensor||{}).name || 'Outdoor', data: outdoor,
+        borderColor: SENSOR_COLORS.outdoor, borderWidth: 2, pointRadius: 3, tension: 0.35 },
+      { label: (data.indoor_sensor||{}).name  || 'Indoor',  data: indoor,
+        borderColor: SENSOR_COLORS.indoor,  borderWidth: 2, pointRadius: 3, tension: 0.35,
+        borderDash: [5,3] },
+      whoDataset(labels),
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { title:{display:true, text:'Hour of day (NST)'}, grid:{color:'#f1f5f9'} },
+        y: { beginAtZero:true, title:{display:true, text:'PM₂.₅ (µg/m³)'}, grid:{color:'#f1f5f9'} },
+      },
+      plugins: { legend:{position:'bottom'}, tooltip:{mode:'index',intersect:false} }
+    }
+  });
+}
+
+// ─── 4. I/O ratio by hour ────────────────────────────────────────────────────
+
+async function loadIORatio() {
+  const siteId = document.getElementById('ratio-site')?.value;
+  if (!siteId) return;
+  const st = document.getElementById('ratio-start').value;
+  const en = document.getElementById('ratio-end').value;
+  let url = `/api/v1/charts/site/${siteId}/io-comparison/?pollutant=PM25`;
+  if (st) url += `&start=${st}`;
+  if (en) url += `&end=${en}`;
+
+  const res  = await fetch(url);
+  const data = await res.json();
+  const labels = data.labels   || [];
+  const ratio  = data.io_ratio || [];
+
+  // Compute stats
+  const validRatio = ratio.filter(v => v !== null);
+  if (validRatio.length) {
+    const sorted = [...validRatio].sort((a,b)=>a-b);
+    const median = sorted[Math.floor(sorted.length/2)];
+    const pctAbove = Math.round(validRatio.filter(v=>v>1).length / validRatio.length * 100);
+    document.getElementById('io-stat-median').textContent = `Median I/O: ${median.toFixed(2)}`;
+    document.getElementById('io-stat-above').textContent  = `Hours indoor > outdoor: ${pctAbove}%`;
+    document.getElementById('io-stats').classList.remove('hidden');
+  }
+
+  destroyChart('io-ratio');
+  charts['io-ratio'] = new Chart(document.getElementById('ioRatioChart').getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets: [
+      { label: 'I/O ratio', data: ratio,
+        backgroundColor: ratio.map(v => v > 1 ? '#dc262666' : '#2563eb44'),
+        borderColor:     ratio.map(v => v > 1 ? '#dc2626'   : '#2563eb'),
+        borderWidth: 1.5, borderRadius: 4 },
+      ratioBaseline(labels),
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { title:{display:true, text:'Hour of day (NST)'}, grid:{color:'#f1f5f9'} },
+        y: { beginAtZero:true, title:{display:true, text:'I/O ratio'}, grid:{color:'#f1f5f9'} },
+      },
+      plugins: { legend:{position:'bottom'}, tooltip:{mode:'index',intersect:false} }
+    }
+  });
+}
+
+// ─── 5. Monthly ───────────────────────────────────────────────────────────────
+
+async function loadMonthly() {
+  const sid  = document.getElementById('mon-sensor').value;
+  const poll = document.getElementById('mon-pollutant').value;
+  const res  = await fetch(`/api/v1/charts/sensor/${sid}/monthly/?pollutant=${poll}`);
+  const data = await res.json();
+  const labels = data.months || [];
+  const avgs   = data.avg   || [];
+  const maxs   = data.max   || [];
+  const sensor = sensors.find(s => String(s.id) === String(sid)) || {};
+
+  destroyChart('monthly');
+  charts['monthly'] = new Chart(document.getElementById('monthlyChart').getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets: [
+      { label: 'Monthly mean', data: avgs,
+        backgroundColor: (sensor.is_indoor ? '#dc2626' : '#2563eb') + '77',
+        borderColor:      sensor.is_indoor ? '#dc2626' : '#2563eb',
+        borderWidth: 1.5, borderRadius: 4 },
+      { label: 'Monthly max', data: maxs, type: 'line',
+        borderColor: '#d97706', borderWidth: 1.5, pointRadius: 4,
+        pointBackgroundColor: '#d97706', tension: 0.2, fill: false },
+      ...( poll === 'PM25' ? [whoDataset(labels)] : []),
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { title:{display:true, text:'Month'}, grid:{color:'#f1f5f9'} },
+        y: { beginAtZero:true, title:{display:true, text:
+          poll === 'PM25' ? 'PM₂.₅ (µg/m³)' :
+          poll === 'CO2'  ? 'CO₂ (ppm)'      :
+          poll === 'TEMP' ? 'Temp (°C)'       : 'Value'}, grid:{color:'#f1f5f9'} },
+      },
+      plugins: { legend:{position:'bottom'} }
+    }
+  });
+}
+
+// ─── 6. Completeness ─────────────────────────────────────────────────────────
+
+sensors.forEach(async s => {
+  const res  = await fetch(`/api/v1/charts/sensor/${s.id}/completeness/`);
+  const data = await res.json();
+  const rows = data.data || [];
+  const ctx  = document.getElementById(`comp-${s.id}`);
   if (!ctx) return;
   new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: (data.days || []).map(d => d.date),
-      datasets: [{ data: (data.days || []).map(d => Math.round(d.completeness * 100)),
-        backgroundColor: (data.days || []).map(d =>
-          d.completeness >= 0.8 ? '#22c55e' : d.completeness >= 0.5 ? '#f59e0b' : '#ef4444'),
+      labels: rows.map(d => d.date),
+      datasets: [{ data: rows.map(d => d.completeness_pct),
+        backgroundColor: rows.map(d =>
+          d.completeness_pct >= 80 ? '#22c55e' :
+          d.completeness_pct >= 50 ? '#f59e0b' : '#ef4444'),
         borderRadius: 2 }]
     },
-    options: { scales: { x: { display: false }, y: { min: 0, max: 100, display: false } },
-               plugins: { legend: { display: false } }, responsive: true, maintainAspectRatio: false }
+    options: { scales:{x:{display:false},y:{min:0,max:100,display:false}},
+               plugins:{legend:{display:false}}, responsive:true, maintainAspectRatio:false }
   });
 });
 
-// ── Station completeness comparison ─────────────────────────────────────────
-async function loadStationCompleteness() {
-  const labels = [], vals = [], colors = [];
-  for (const s of sensors) {
-    const res = await fetch(`/api/v1/charts/sensor/${s.id}/completeness/`);
-    const data = await res.json();
-    const avg = (data.days || []).reduce((a, d) => a + d.completeness, 0) / Math.max((data.days || []).length, 1);
-    labels.push(s.name);
-    vals.push(Math.round(avg * 100));
-    colors.push(avg >= 0.8 ? '#22c55e' : avg >= 0.5 ? '#f59e0b' : '#ef4444');
-  }
-  new Chart(document.getElementById('stationCompletenessChart').getContext('2d'), {
-    type: 'bar',
-    data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderRadius: 4 }] },
-    options: {
-      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-      scales: { x: { min: 0, max: 100, title: { display: true, text: 'Completeness (%)' } } },
-      plugins: { legend: { display: false } }
-    }
-  });
-}
-loadStationCompleteness();
+// ─── 7. Custom script charts ──────────────────────────────────────────────────
 
-// ── Rolling average chart ────────────────────────────────────────────────────
-let rollingChart;
-async function loadRolling(sensorId, btn) {
-  document.querySelectorAll('.sensor-chip').forEach(b => b.classList.remove('sensor-chip-active'));
-  if (btn) btn.classList.add('sensor-chip-active');
-  const end = new Date();
-  const start = new Date(end - 30 * 86400 * 1000);
-  const fmt = d => d.toISOString().slice(0, 19);
-  const res = await fetch(`/api/v1/charts/sensor/${sensorId}/timeseries/?pollutant=PM25&start=${fmt(start)}&end=${fmt(end)}`);
-  const data = await res.json();
-  const ctx = document.getElementById('rollingChart').getContext('2d');
-  if (rollingChart) rollingChart.destroy();
-  rollingChart = new Chart(ctx, {
-    type: 'line',
-    data: { datasets: [
-      { label: 'PM₂.₅', data: data.points || [], borderColor: '#2563eb', borderWidth: 1.5, pointRadius: 0, tension: 0.3,
-        parsing: { xAxisKey: 'x', yAxisKey: 'y' } },
-      { label: 'WHO 24h (15)', data: (data.points || []).map(p => ({ x: p.x, y: 15 })),
-        borderColor: '#16a34a', borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0 },
-      { label: 'Nepal NAAQS (40)', data: (data.points || []).map(p => ({ x: p.x, y: 40 })),
-        borderColor: '#b45309', borderDash: [3, 3], borderWidth: 1.5, pointRadius: 0 },
-    ]},
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: { x: { type: 'time', time: { unit: 'day' }, grid: { color: '#f1f5f9' } },
-                y: { beginAtZero: true, title: { display: true, text: 'µg/m³' }, grid: { color: '#f1f5f9' } } },
-      plugins: { legend: { position: 'bottom' }, tooltip: { mode: 'index', intersect: false } }
-    }
-  });
+document.querySelectorAll('canvas[data-type]').forEach(canvas => {
+  try {
+    const labels   = JSON.parse(canvas.dataset.labels   || '[]');
+    const datasets = JSON.parse(canvas.dataset.datasets || '[]');
+    const ctype    = canvas.dataset.type;
+    const chartType = ctype === 'bar' ? 'bar' : ctype === 'scatter' ? 'scatter' : 'line';
+    const colors = SENSOR_COLORS.default;
+    const styled = datasets.map((ds, i) => ({
+      ...ds,
+      borderColor:     ds.borderColor     || colors[i % colors.length],
+      backgroundColor: ds.backgroundColor || (chartType === 'bar' ? colors[i % colors.length] + '77' : 'transparent'),
+      borderWidth: ds.borderWidth || 1.5,
+      pointRadius: ds.pointRadius !== undefined ? ds.pointRadius : (chartType === 'line' ? 0 : 3),
+      tension: 0.3,
+    }));
+    new Chart(canvas.getContext('2d'), {
+      type: chartType,
+      data: { labels, datasets: styled },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        scales:{ x:{grid:{color:'#f1f5f9'}}, y:{beginAtZero:true,grid:{color:'#f1f5f9'}} },
+        plugins:{ legend:{position:'bottom'} }
+      }
+    });
+  } catch(e) { console.warn('Chart error:', e); }
+});
+
+// ─── 8. Run script (admin/maintainer) ─────────────────────────────────────────
+
+async function runScript(pk, btn) {
+  btn.disabled = true; btn.textContent = 'Running…';
+  try {
+    const data = await (await fetch(`/portal/analysis/run/${pk}/`)).json();
+    btn.textContent = data.ok ? '✓ Done' : '✗ Error';
+    if (data.ok) setTimeout(() => location.reload(), 600);
+  } catch(e) { btn.textContent = '✗ Error'; }
+  setTimeout(() => { btn.disabled=false; btn.textContent='↺ Run'; }, 3000);
 }
-if (sensors.length > 0) loadRolling(sensors[0].id, null);
+
+// ─── Initialise all charts on load ───────────────────────────────────────────
+
+(async function init() {
+  // Set date range defaults from first sensor's available data
+  if (sensors.length > 0) {
+    const firstId = sensors[0].id;
+    const minD = sensorMinDate(firstId), maxD = sensorMaxDate(firstId) || today();
+
+    // Rolling — default to last 7 days
+    document.getElementById('roll-start').value = daysAgo(7);
+    document.getElementById('roll-end').value   = maxD;
+    await loadRolling();
+
+    // Diurnal single — default to last 7 days
+    document.getElementById('diu-start').value  = daysAgo(7);
+    document.getElementById('diu-end').value    = maxD;
+    await loadDiurnal();
+
+    // Monthly
+    await loadMonthly();
+  }
+
+  // I/O site charts (paired sites)
+  {% if paired_sites %}
+  const ioStartDefault = daysAgo(7);
+  const ioEndDefault   = today();
+  if (document.getElementById('io-start'))    document.getElementById('io-start').value    = ioStartDefault;
+  if (document.getElementById('io-end'))      document.getElementById('io-end').value      = ioEndDefault;
+  if (document.getElementById('ratio-start')) document.getElementById('ratio-start').value = ioStartDefault;
+  if (document.getElementById('ratio-end'))   document.getElementById('ratio-end').value   = ioEndDefault;
+  await loadIODiurnal();
+  await loadIORatio();
+  {% endif %}
+})();
 </script>
 {% endblock %}

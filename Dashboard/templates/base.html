@@ -56,23 +56,23 @@
 
     /* ── Stat cards ──────────────────────────────────────────────────── */
     .stat-card  { @apply bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4; }
-    .stat-label { @apply text-xs font-medium text-slate-400 uppercase tracking-wide mb-1; }
+    .stat-label { @apply text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1; }
     .stat-value { @apply text-3xl font-bold leading-tight; }
-    .stat-sub   { @apply text-xs text-slate-400 mt-0.5; }
+    .stat-sub   { @apply text-xs text-slate-500 mt-0.5; }
 
     /* ── Finding cards ───────────────────────────────────────────────── */
     .finding-card  { @apply bg-white rounded-xl border border-slate-200 p-5 shadow-sm; }
     .finding-icon  { @apply inline-flex items-center justify-center w-10 h-10 rounded-xl mb-3; }
     .finding-title { @apply text-sm font-semibold text-slate-800 mb-1; }
-    .finding-body  { @apply text-xs text-slate-500 leading-relaxed; }
+    .finding-body  { @apply text-sm text-slate-600 leading-relaxed; }
 
     /* ── Analysis cards ──────────────────────────────────────────────── */
     .analysis-card    { @apply bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:border-nao-red hover:shadow-md transition-all flex flex-col; }
     .analysis-icon    { @apply inline-flex items-center justify-center w-11 h-11 rounded-xl mb-4; }
     .analysis-icon-sm { @apply inline-flex items-center justify-center w-9 h-9 rounded-xl text-base; }
     .analysis-title   { @apply text-sm font-semibold text-slate-800 mb-2; }
-    .analysis-body    { @apply text-xs text-slate-500 leading-relaxed flex-1; }
-    .analysis-link    { @apply text-xs font-medium text-nao-blue group-hover:underline mt-3 block; }
+    .analysis-body    { @apply text-sm text-slate-600 leading-relaxed flex-1; }
+    .analysis-link    { @apply text-sm font-medium text-nao-blue group-hover:underline mt-3 block; }
 
     /* ── Status badges ───────────────────────────────────────────────── */
     .status-badge         { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold; }
@@ -127,8 +127,8 @@
     .portal-card       { @apply bg-white rounded-xl border border-slate-200 p-6 shadow-sm; }
     .portal-card-icon  { @apply inline-flex items-center justify-center w-11 h-11 rounded-xl mb-4; }
     .portal-card-title { @apply text-sm font-semibold text-slate-800 mb-1; }
-    .portal-card-body  { @apply text-xs text-slate-500 leading-relaxed; }
-    .portal-link       { @apply block text-xs font-medium text-nao-blue hover:text-blue-800 hover:underline py-0.5; }
+    .portal-card-body  { @apply text-sm text-slate-600 leading-relaxed; }
+    .portal-link       { @apply block text-sm font-medium text-nao-blue hover:text-blue-800 hover:underline py-0.5; }
 
     /* ── Map containers ──────────────────────────────────────────────── */
     #full-map, #main-map { background: #e8eef4; }
@@ -155,7 +155,7 @@
   {% block extra_head %}{% endblock %}
 </head>
 
-<body class="bg-gray-50 text-slate-800 font-sans antialiased">
+<body class="bg-gray-50 text-slate-800 font-sans antialiased text-sm leading-relaxed">
 
   {# ── Top navigation ─────────────────────────────────────────────── #}
   {% include "components/topnav.html" %}
@@ -190,10 +190,15 @@
   <script>
     // Set Chart.js global defaults once
     Chart.defaults.font.family = 'Inter, system-ui, sans-serif';
-    Chart.defaults.color = '#475569';
-    Chart.defaults.plugins.legend.labels.boxWidth = 12;
+    Chart.defaults.font.size = 13;
+    Chart.defaults.color = '#334155';   // slate-700 — readable on white
+    Chart.defaults.plugins.legend.labels.boxWidth = 14;
+    Chart.defaults.plugins.legend.labels.padding = 16;
+    Chart.defaults.plugins.legend.labels.font = { size: 13 };
     Chart.defaults.plugins.tooltip.cornerRadius = 6;
-    Chart.defaults.plugins.tooltip.padding = 10;
+    Chart.defaults.plugins.tooltip.padding = 12;
+    Chart.defaults.plugins.tooltip.titleFont = { size: 13, weight: 'bold' };
+    Chart.defaults.plugins.tooltip.bodyFont  = { size: 13 };
 
     const WHO_24H = 15;
     const NEPAL_NAAQS_24H = 40;

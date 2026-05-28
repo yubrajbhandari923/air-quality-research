@@ -28,9 +28,10 @@ from datetime import timedelta
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Avg, Count, Max, Min
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.views.generic import TemplateView
+from django.views.generic import TemplateView, View
 
 from apps.readings.models import CanonicalReading, IngestionLog
 from apps.sensors.models import Sensor, Site
@@ -181,6 +182,20 @@ API_ENDPOINTS = [
             {"name": "X-API-Key", "type": "header", "description": "Your sensor API key (obtain from portal)"},
         ],
         "example": 'POST /api/v1/readings/\nX-API-Key: your-key-here\nContent-Type: application/json\n\n[{"serial_number":"81432434001","ts":"2025-12-01T06:00:00Z","pm25":35.2,"pm10":42.1,"temp_c":18.5,"rh":72.0}]',
+    },
+    {
+        "method": "GET", "path": "/api/v1/export/",
+        "description": "CSV / JSON export (access-controlled)",
+        "detail": "Generates a downloadable CSV or JSON file. Unauthenticated / PUBLIC users get the last 7 days, up to 500 rows. RESEARCHER accounts get up to 50,000 rows over any date range. ADMIN/MAINTAINER get up to 500,000 rows.",
+        "params": [
+            {"name": "sensor",    "type": "int",      "description": "Sensor ID (required)"},
+            {"name": "pollutant", "type": "string",   "description": "PM25, PM10, PM1, CO2, TVOC, TEMP, RH (default: PM25)"},
+            {"name": "quality",   "type": "string",   "description": "GOOD, UNVALIDATED, ALL (default: GOOD)"},
+            {"name": "start",     "type": "datetime", "description": "ISO 8601 start — researcher+ only"},
+            {"name": "end",       "type": "datetime", "description": "ISO 8601 end"},
+            {"name": "format",    "type": "string",   "description": "csv (default) or json"},
+        ],
+        "example": "GET /api/v1/export/?sensor=1&pollutant=PM25&quality=GOOD&format=csv",
     },
     {
         "method": "GET", "path": "/api/v1/charts/sensor/{id}/timeseries/",
@@ -481,13 +496,45 @@ class AnalysisView(TemplateView):
         except Exception:
             exposure_estimates = []
 
+        # Analysis scripts — auto-refresh CONTINUOUS ones that are stale
+        try:
+            from apps.analysis.models import AnalysisScript
+            scripts = list(AnalysisScript.objects.filter(is_active=True))
+            for s in scripts:
+                if s.needs_refresh:
+                    s.execute()
+        except Exception:
+            scripts = []
+
+        # Sensor date ranges for date pickers (min/max available date per sensor)
+        sensor_dates = {}
+        for s in sensors:
+            from django.db.models import Min as _Min, Max as _Max
+            agg = CanonicalReading.objects.filter(
+                sensor=s, pollutant="PM25", is_duplicate=False,
+            ).aggregate(min_ts=_Min("original_ts"), max_ts=_Max("original_ts"))
+            sensor_dates[s.pk] = {
+                "min": agg["min_ts"].date().isoformat() if agg["min_ts"] else None,
+                "max": agg["max_ts"].date().isoformat() if agg["max_ts"] else None,
+            }
+
+        # All sites with paired sensors
+        paired_sites = []
+        for site in Site.objects.all():
+            site_sensors = [s for s in sensors if s.site_id == site.pk]
+            if any(s.is_indoor for s in site_sensors) and any(not s.is_indoor for s in site_sensors):
+                paired_sites.append(site)
+
         ctx.update({
             "sensors":           sensors,
             "site_with_pair":    site_with_pair,
+            "paired_sites":      paired_sites,
             "io_ratio":          io_ratio,
             "pct_indoor_worse":  pct_indoor_worse,
             "sensor_list_json":  sensor_list_json,
+            "sensor_dates_json": json.dumps(sensor_dates),
             "exposure_estimates": exposure_estimates,
+            "analysis_scripts":  scripts,
         })
         return ctx
 
@@ -497,10 +544,37 @@ class DataAccessView(TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
+        sensors = list(Sensor.objects.select_related("site").order_by("site__name"))
+
+        try:
+            from apps.analysis.models import DownloadConfig
+            dl_cfg = DownloadConfig.get()
+        except Exception:
+            class _Cfg:
+                max_rows_public = 500
+                public_days_limit = 7
+            dl_cfg = _Cfg()
+
+        # Determine the current user's download tier
+        user = self.request.user
+        if user.is_authenticated and getattr(user, "role", "PUBLIC") in ("ADMIN", "MAINTAINER"):
+            dl_tier = "admin"
+        elif user.is_authenticated and getattr(user, "role", "PUBLIC") == "RESEARCHER":
+            dl_tier = "researcher"
+        else:
+            dl_tier = "public"
+
         ctx.update({
-            "sensors":        Sensor.objects.select_related("site").order_by("site__name"),
-            "api_endpoints":  API_ENDPOINTS,
+            "sensors":         sensors,
+            "sensors_json":    json.dumps([
+                {"id": s.pk, "name": s.friendly_name, "serial": s.serial_number,
+                 "site": s.site.name if s.site else "", "is_indoor": s.is_indoor}
+                for s in sensors
+            ]),
+            "api_endpoints":   API_ENDPOINTS,
             "data_dictionary": DATA_DICTIONARY,
+            "dl_cfg":          dl_cfg,
+            "dl_tier":         dl_tier,
         })
         return ctx
 
@@ -567,3 +641,23 @@ class APIKeysView(PortalRequiredMixin, TemplateView):
 class RunIngestionView(PortalRequiredMixin, TemplateView):
     template_name = "portal/run_ingestion.html"
     allowed_roles = ("MAINTAINER", "ADMIN")
+
+
+class RunAnalysisScriptView(PortalRequiredMixin, View):
+    """POST /portal/analysis/run/<pk>/ — run a script and return JSON."""
+    allowed_roles = ("MAINTAINER", "ADMIN")
+
+    def get(self, request, pk):
+        try:
+            from apps.analysis.models import AnalysisScript
+            script = get_object_or_404(AnalysisScript, pk=pk)
+            result, error = script.execute()
+            return JsonResponse({
+                "ok": not bool(error),
+                "error": error,
+                "result": result,
+                "last_run_at": script.last_run_at.isoformat() if script.last_run_at else None,
+                "run_duration_ms": script.run_duration_ms,
+            })
+        except Exception as e:
+            return JsonResponse({"ok": False, "error": str(e)}, status=500)

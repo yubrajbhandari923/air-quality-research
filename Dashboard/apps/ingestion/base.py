@@ -115,62 +115,65 @@ class BaseDataConverter(ABC):
 
     def save_to_canonical_schema(self, records: list[dict]) -> dict:
         """
-        Persist canonical records to the database.
+        Persist canonical records using bulk_create for speed.
 
-        Detects duplicates by checking (sensor_id, pollutant, original_ts).
-        Duplicates are saved with is_duplicate=True instead of being dropped.
+        Duplicate detection relies on the DB unique constraint
+        (sensor, pollutant, original_ts, is_duplicate=False) via
+        ignore_conflicts=True.  We measure saved count by comparing
+        the row count before and after the insert.
 
         Returns:
             {"saved": int, "duplicates": int, "errors": int}
         """
-        # Deferred import to avoid loading Django models before setup
         from apps.readings.models import CanonicalReading
 
-        saved = 0
-        duplicates = 0
-        errors = 0
+        if not records:
+            return {"saved": 0, "duplicates": 0, "errors": 0}
 
-        for rec in records:
-            try:
-                # Check for existing record
-                exists = CanonicalReading.objects.filter(
-                    sensor_id=rec["sensor_id"],
-                    pollutant=rec["pollutant"],
-                    original_ts=rec["original_ts"],
-                    is_duplicate=False,
-                ).exists()
+        BATCH = 2000
 
-                if exists:
-                    rec["is_duplicate"] = True
-                    duplicates += 1
-                else:
-                    rec["is_duplicate"] = False
+        from django.db import transaction
 
-                CanonicalReading.objects.create(
-                    original_ts=rec["original_ts"],
-                    timezone=rec.get("timezone", "Asia/Kathmandu"),
-                    interval_seconds=rec.get("interval_seconds"),
-                    pollutant=rec["pollutant"],
-                    unit=rec["unit"],
-                    raw_value=rec.get("raw_value"),
-                    cleaned_value=rec.get("cleaned_value"),
-                    sensor_id=rec["sensor_id"],
-                    site_id=rec["site_id"],
-                    is_indoor=rec.get("is_indoor", False),
-                    source_type=rec.get("source_type", self.source_type),
-                    dataset_id=rec.get("dataset_id"),
-                    quality_flag=rec.get("quality_flag", "UNVALIDATED"),
-                    flag_reason=rec.get("flag_reason", ""),
-                    is_duplicate=rec["is_duplicate"],
-                )
-                if not rec["is_duplicate"]:
-                    saved += 1
+        sensor_ids = {r["sensor_id"] for r in records}
 
-            except Exception as exc:
-                logger.error("Failed to save record: %s | error: %s", rec, exc)
-                errors += 1
+        before = CanonicalReading.objects.filter(sensor_id__in=sensor_ids).count()
+        try:
+            # Build and save in BATCH-sized chunks so we never hold all N records
+            # as model instances in memory at once (each instance ~500 B Python
+            # overhead; 2M records × 500 B ≈ 1 GB).  One wrapping transaction
+            # keeps SQLite fast (avoids per-batch fsync).
+            with transaction.atomic():
+                for i in range(0, len(records), BATCH):
+                    chunk = records[i : i + BATCH]
+                    objs = [
+                        CanonicalReading(
+                            original_ts=rec["original_ts"],
+                            timezone=rec.get("timezone", "Asia/Kathmandu"),
+                            interval_seconds=rec.get("interval_seconds"),
+                            pollutant=rec["pollutant"],
+                            unit=rec["unit"],
+                            raw_value=rec.get("raw_value"),
+                            cleaned_value=rec.get("cleaned_value"),
+                            sensor_id=rec["sensor_id"],
+                            site_id=rec["site_id"],
+                            is_indoor=rec.get("is_indoor", False),
+                            source_type=rec.get("source_type", self.source_type),
+                            dataset_id=rec.get("dataset_id"),
+                            quality_flag=rec.get("quality_flag", "UNVALIDATED"),
+                            flag_reason=rec.get("flag_reason", ""),
+                            is_duplicate=False,
+                        )
+                        for rec in chunk
+                    ]
+                    CanonicalReading.objects.bulk_create(objs, ignore_conflicts=True)
+        except Exception as exc:
+            logger.error("[%s] bulk_create failed: %s", self.source_name, exc)
+            return {"saved": 0, "duplicates": 0, "errors": len(records)}
 
-        return {"saved": saved, "duplicates": duplicates, "errors": errors}
+        after = CanonicalReading.objects.filter(sensor_id__in=sensor_ids).count()
+        saved = after - before
+        duplicates = len(records) - saved
+        return {"saved": saved, "duplicates": duplicates, "errors": 0}
 
     def run(self, source: Any) -> dict:
         """
