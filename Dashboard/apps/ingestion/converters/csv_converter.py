@@ -348,24 +348,31 @@ class BelauriCSVConverter(BaseDataConverter):
         )
 
         try:
-            df = self._read_source(path)
-            df = self.normalize_timestamps(df)
-            records = self.map_columns(df)
-            records = self.assign_quality_flags(records)
+            total_saved = total_dupes = total_errors = total_attempted = 0
 
-            # Inject FK ids
-            for rec in records:
-                rec["sensor_id"] = sensor.pk
-                rec["site_id"] = site.pk
-                rec["dataset_id"] = dataset.pk
+            for chunk in pd.read_csv(path, low_memory=False, chunksize=5000):
+                chunk = self.normalize_timestamps(chunk)
+                chunk_records = self.map_columns(chunk)
+                chunk_records = self.assign_quality_flags(chunk_records)
 
-            result = self.save_to_canonical_schema(records)
+                for rec in chunk_records:
+                    rec["sensor_id"] = sensor.pk
+                    rec["site_id"] = site.pk
+                    rec["dataset_id"] = dataset.pk
 
-            dataset.record_count = result["saved"]
+                total_attempted += len(chunk_records)
+                br = self.save_to_canonical_schema(chunk_records)
+                total_saved  += br["saved"]
+                total_dupes  += br["duplicates"]
+                total_errors += br["errors"]
+
+            result = {"saved": total_saved, "duplicates": total_dupes, "errors": total_errors}
+
+            dataset.record_count = total_saved
             dataset.save(update_fields=["record_count"])
 
             status = (
-                IngestionLog.Status.SUCCESS if result["errors"] == 0
+                IngestionLog.Status.SUCCESS if total_errors == 0
                 else IngestionLog.Status.PARTIAL
             )
 
@@ -374,10 +381,10 @@ class BelauriCSVConverter(BaseDataConverter):
                 source_file=str(path),
                 dataset=dataset,
                 status=status,
-                records_attempted=len(records),
-                records_saved=result["saved"],
-                records_duplicate=result["duplicates"],
-                records_error=result["errors"],
+                records_attempted=total_attempted,
+                records_saved=total_saved,
+                records_duplicate=total_dupes,
+                records_error=total_errors,
             )
 
             logger.info(

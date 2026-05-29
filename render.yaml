@@ -15,7 +15,7 @@ services:
 
     startCommand: |
       cd Dashboard
-      gunicorn nepal_aq.wsgi:application --bind 0.0.0.0:$PORT
+      gunicorn nepal_aq.wsgi:application --bind 0.0.0.0:$PORT --timeout 300
 
     envVars:
       - key: DJANGO_SETTINGS_MODULE

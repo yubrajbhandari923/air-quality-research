@@ -19,7 +19,8 @@
       "Bash(python -m ensurepip --upgrade)",
       "Bash(python -c \"import duckdb; print\\('duckdb', duckdb.__version__\\)\")",
       "Bash(python -m py_compile apps/api/views.py apps/dashboard/views.py)",
-      "Bash(python -m py_compile apps/api/views.py)"
+      "Bash(python -m py_compile apps/api/views.py)",
+      "Bash(xargs cat)"
     ]
   }
 }

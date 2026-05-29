@@ -304,12 +304,26 @@ class GenericCSVConverter(BaseDataConverter):
         )
 
         try:
-            df = self._read_source(source)
-            df = self.normalize_timestamps(df)
-            records = self.map_columns(df)
-            records = self.assign_quality_flags(records)
+            total_saved = total_dupes = total_errors = total_attempted = 0
 
-            if not records:
+            for chunk in pd.read_csv(source, low_memory=False, chunksize=5000):
+                chunk = self.normalize_timestamps(chunk)
+                chunk_records = self.map_columns(chunk)
+                chunk_records = self.assign_quality_flags(chunk_records)
+
+                if not chunk_records:
+                    continue
+
+                for rec in chunk_records:
+                    rec["dataset_id"] = dataset.pk
+
+                total_attempted += len(chunk_records)
+                result = self.save_to_canonical_schema(chunk_records)
+                total_saved  += result["saved"]
+                total_dupes  += result["duplicates"]
+                total_errors += result["errors"]
+
+            if total_attempted == 0 and self._skipped_serials:
                 dataset.notes = "No records matched registered sensors."
                 dataset.save(update_fields=["notes"])
                 IngestionLog.objects.create(
@@ -334,16 +348,13 @@ class GenericCSVConverter(BaseDataConverter):
                     "skipped_serials": list(self._skipped_serials),
                 }
 
-            for rec in records:
-                rec["dataset_id"] = dataset.pk
+            result = {"saved": total_saved, "duplicates": total_dupes, "errors": total_errors}
 
-            result = self.save_to_canonical_schema(records)
-
-            dataset.record_count = result["saved"]
+            dataset.record_count = total_saved
             dataset.save(update_fields=["record_count"])
 
             log_status = (
-                IngestionLog.Status.SUCCESS if result["errors"] == 0
+                IngestionLog.Status.SUCCESS if total_errors == 0
                 else IngestionLog.Status.PARTIAL
             )
             IngestionLog.objects.create(
@@ -351,10 +362,10 @@ class GenericCSVConverter(BaseDataConverter):
                 source_file=source_label,
                 dataset=dataset,
                 status=log_status,
-                records_attempted=len(records),
-                records_saved=result["saved"],
-                records_duplicate=result["duplicates"],
-                records_error=result["errors"],
+                records_attempted=total_attempted,
+                records_saved=total_saved,
+                records_duplicate=total_dupes,
+                records_error=total_errors,
                 triggered_by=triggered_by,
             )
 

@@ -130,8 +130,12 @@ class BaseDataConverter(ABC):
 
         try:
             from apps.ingestion.raw_store import raw_store
-            saved, duplicates = raw_store.append_batch(records)
-            return {"saved": saved, "duplicates": duplicates, "errors": 0}
+            total_saved = total_dupes = 0
+            for i in range(0, len(records), 1000):
+                s, d = raw_store.append_batch(records[i:i + 1000])
+                total_saved += s
+                total_dupes += d
+            return {"saved": total_saved, "duplicates": total_dupes, "errors": 0}
         except Exception as exc:
             logger.error("[%s] RawDataStore write failed: %s", self.source_name, exc)
             return {"saved": 0, "duplicates": 0, "errors": len(records)}
