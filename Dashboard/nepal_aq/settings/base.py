@@ -102,6 +102,7 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "nepal_aq.sqlite3",
+            "OPTIONS": {"timeout": 30},
         }
     }
 
@@ -200,3 +201,13 @@ OPENAQ_DATA_DIR = env(
     "OPENAQ_DATA_DIR",
     default=str(Path(__file__).resolve().parent.parent.parent.parent / "Data" / "open-aq"),
 )
+
+# Raw Parquet archive — set to an absolute path to enable file-based raw storage.
+# Structure: RAW_DATA_DIR/sensor_{serial}/{YYYY}/{YYYY-MM-DD}.parquet
+# Requires: pip install pyarrow
+# Leave empty to disable (all raw data stays in the database only).
+RAW_DATA_DIR = env("RAW_DATA_DIR", default="")
+
+# DuckDB file for raw minute-level sensor readings (replaces CanonicalReading bulk inserts).
+# Defaults to <BASE_DIR>/raw_data/readings.duckdb — override via RAW_DUCKDB_PATH env var.
+RAW_DUCKDB_PATH = env("RAW_DUCKDB_PATH", default=str(BASE_DIR / "raw_data" / "readings.duckdb"))

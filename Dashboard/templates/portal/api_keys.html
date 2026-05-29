@@ -1,29 +1,161 @@
 {% extends "base.html" %}
 {% block title %}API Keys — Portal{% endblock %}
+
 {% block content %}
 <div class="max-w-3xl mx-auto px-4 sm:px-6 py-12">
-  <h1 class="text-2xl font-bold text-slate-900 mb-2">API Keys</h1>
-  <p class="text-sm text-slate-500 mb-8">Manage your API keys for submitting sensor readings or accessing the full data API.</p>
-  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-    {% if api_keys %}
-      <table class="w-full text-sm">
-        <thead class="border-b border-slate-200"><tr>
-          <th class="text-left py-2 text-xs font-semibold text-slate-500">Name</th>
-          <th class="text-left py-2 text-xs font-semibold text-slate-500">Key (masked)</th>
-          <th class="text-left py-2 text-xs font-semibold text-slate-500">Created</th>
-        </tr></thead>
-        <tbody class="divide-y divide-slate-100">
-          {% for key in api_keys %}
-          <tr><td class="py-2.5 text-slate-800">{{ key.name }}</td>
-              <td class="py-2.5 font-mono text-xs text-slate-500">{{ key.key|slice:":8" }}…</td>
-              <td class="py-2.5 text-xs text-slate-400">{{ key.created_at|date:"d M Y" }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p class="text-sm text-slate-500">No API keys yet. Contact an admin to create one.</p>
-    {% endif %}
-    <div class="mt-6"><a href="{% url 'portal:index' %}" class="btn-secondary text-sm">← Back to portal</a></div>
+
+  <div class="mb-8">
+    <a href="{% url 'portal:index' %}" class="text-sm text-slate-500 hover:text-slate-700">← Portal</a>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">API Keys</h1>
+    <p class="mt-1 text-sm text-slate-500">
+      Keys are shown once at creation and never again.
+      SENSOR keys allow a sensor to POST readings.
+      RESEARCHER keys allow GET access to the full readings API.
+    </p>
   </div>
+
+  {% if messages %}
+    {% for m in messages %}
+    <div class="mb-4 rounded-lg px-4 py-3 text-sm
+      {% if m.tags == 'success' %}bg-green-50 text-green-700 border border-green-200 font-mono break-all
+      {% elif m.tags == 'warning' %}bg-amber-50 text-amber-700 border border-amber-200
+      {% else %}bg-red-50 text-red-700 border border-red-200{% endif %}">
+      {{ m }}
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  {# ── Existing keys ────────────────────────────────────────────────── #}
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mb-8">
+    {% if api_keys %}
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Name</th>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Role</th>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Sensor</th>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Prefix</th>
+          <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Last used</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for key in api_keys %}
+        <tr class="hover:bg-slate-50">
+          <td class="px-4 py-3 text-slate-800 font-medium">{{ key.name }}</td>
+          <td class="px-4 py-3">
+            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+              {% if key.role == 'SENSOR' %}bg-blue-50 text-blue-700
+              {% elif key.role == 'RESEARCHER' %}bg-purple-50 text-purple-700
+              {% else %}bg-red-50 text-red-700{% endif %}">
+              {{ key.get_role_display }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-xs text-slate-500">
+            {% if key.sensor %}{{ key.sensor.display_name }}{% else %}—{% endif %}
+          </td>
+          <td class="px-4 py-3 font-mono text-xs text-slate-500">{{ key.prefix }}…</td>
+          <td class="px-4 py-3 text-xs text-slate-400">{{ key.last_used|date:"d M Y HH:ii"|default:"Never" }}</td>
+          <td class="px-4 py-3">
+            <form method="post" class="inline" onsubmit="return confirm('Revoke this key?')">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="revoke">
+              <input type="hidden" name="key_id" value="{{ key.pk }}">
+              <button type="submit" class="text-xs text-red-600 hover:underline">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="p-8 text-center text-sm text-slate-500">No active keys. Create one below.</div>
+    {% endif %}
+  </div>
+
+  {# ── Create key form ──────────────────────────────────────────────── #}
+  <div id="create" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-base font-semibold text-slate-800 mb-4">Create new API key</h2>
+    <form method="post" class="space-y-4">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="create">
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Name <span class="text-red-500">*</span></label>
+        <input type="text" name="name" required
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+               placeholder="e.g. Belauri Outdoor Sensor">
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Role</label>
+        <select name="role" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+          <option value="SENSOR">SENSOR — POST readings only</option>
+          <option value="RESEARCHER">RESEARCHER — GET data access</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Bind to sensor (optional)</label>
+        <select name="sensor_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+          <option value="">— None (serial_number required in every request) —</option>
+          {% for s in sensors %}
+          <option value="{{ s.pk }}">{{ s.display_name }} ({{ s.serial_number }})</option>
+          {% endfor %}
+        </select>
+        <p class="mt-1 text-xs text-slate-400">When a key is bound to a sensor, the sensor can omit <code>serial_number</code> from the request body.</p>
+      </div>
+
+      <button type="submit"
+              class="px-5 py-2.5 rounded-lg bg-nao-blue text-white text-sm font-semibold hover:bg-blue-700 transition-colors">
+        Generate key
+      </button>
+    </form>
+  </div>
+
+  {# ── Quick API reference ──────────────────────────────────────────── #}
+  <div class="mt-8 rounded-xl border border-slate-200 bg-slate-50 p-5 text-xs text-slate-600 space-y-3">
+    <h3 class="font-semibold text-slate-800 text-sm">Quick reference</h3>
+
+    <div>
+      <p class="font-medium text-slate-700 mb-1">Single reading (live sensor, one timestamp):</p>
+      <pre class="bg-slate-900 text-green-400 rounded-lg p-3 overflow-x-auto">POST /api/v1/readings/
+X-API-Key: &lt;your-key&gt;
+Content-Type: application/json
+
+{
+  "serial_number": "81432434001",
+  "timestamp": "2026-05-29T08:00:00Z",
+  "readings": [
+    {"pollutant": "PM25", "value": 45.2, "unit": "µg/m³"},
+    {"pollutant": "TEMP", "value": 18.5, "unit": "°C"}
+  ]
+}</pre>
+    </div>
+
+    <div>
+      <p class="font-medium text-slate-700 mb-1">Batch upload (offline catch-up, multiple timestamps):</p>
+      <pre class="bg-slate-900 text-green-400 rounded-lg p-3 overflow-x-auto">POST /api/v1/readings/batch/
+X-API-Key: &lt;your-key&gt;
+Content-Type: application/json
+
+{
+  "serial_number": "81432434001",
+  "readings": [
+    {
+      "timestamp": "2026-05-29T08:00:00Z",
+      "measurements": [{"pollutant": "PM25", "value": 45.2, "unit": "µg/m³"}]
+    },
+    {
+      "timestamp": "2026-05-29T08:01:00Z",
+      "measurements": [{"pollutant": "PM25", "value": 47.1, "unit": "µg/m³"}]
+    }
+  ]
+}</pre>
+    </div>
+
+    <p class="text-slate-400">Valid pollutants: PM1, PM25, PM4, PM10, CO2, CO, SO2, O3, NO2, CH2O, TVOC, TEMP, RH, BARO, NC05, NC1, NC25, NC4, NC10</p>
+  </div>
+
 </div>
 {% endblock %}

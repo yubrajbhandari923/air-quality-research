@@ -73,7 +73,6 @@
           {% endif %}
         </div>
 
-        {# WHO / Nepal guideline comparison #}
         <div class="space-y-2 text-xs">
           <div class="flex items-center justify-between rounded-lg px-3 py-2 {% if exceeds_who %}bg-red-50 border border-red-200{% else %}bg-green-50 border border-green-200{% endif %}">
             <span class="{% if exceeds_who %}text-red-700{% else %}text-green-700{% endif %} font-medium">
@@ -111,7 +110,7 @@
         {% endif %}
       </div>
 
-      {# Companion sensor (indoor/outdoor pair) #}
+      {# Companion sensor #}
       {% if companion %}
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
         <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Paired station</h2>
@@ -134,30 +133,69 @@
       </div>
       {% endif %}
 
+      {# Last data + availability grid #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Data availability</h2>
+        {% if last_data_date %}
+        <div class="flex items-center justify-between text-sm mb-3">
+          <span class="text-slate-400">Latest record</span>
+          <span class="font-medium text-slate-700">{{ last_data_date|date:"d M Y" }}</span>
+        </div>
+        {% if last_data_mean %}
+        <div class="flex items-center justify-between text-sm mb-3">
+          <span class="text-slate-400">Last daily avg PM₂.₅</span>
+          <span class="font-semibold text-slate-700">{{ last_data_mean }} µg/m³</span>
+        </div>
+        {% endif %}
+        {% else %}
+        <p class="text-xs text-slate-400 mb-3">No aggregated data yet.</p>
+        {% endif %}
+        {# 90-day mini availability grid — 13 weeks × 7 days #}
+        <div id="avail-grid" class="mt-1"></div>
+        <p class="text-xs text-slate-400 mt-2">
+          <span class="inline-block w-3 h-3 rounded-sm bg-green-400 align-middle mr-1"></span>has data
+          <span class="inline-block w-3 h-3 rounded-sm bg-slate-100 border border-slate-200 align-middle mx-1 ml-2"></span>no data
+        </p>
+      </div>
+
       {# Download #}
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
         <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Download data</h2>
         <div class="space-y-2">
-          <a href="/api/v1/readings/?sensor={{ sensor.pk }}&format=csv&quality=GOOD"
-             class="flex items-center gap-2 text-sm text-nao-blue hover:underline">
+          <a href="{% url 'observatory:data_access' %}?sensors={{ sensor.pk }}"
+             class="flex items-center gap-2 text-sm text-nao-blue hover:underline font-medium">
             <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Cleaned readings (CSV)
+            Open download wizard →
           </a>
-          {% if user.role in 'RESEARCHER ADMIN' %}
-          <a href="/api/v1/readings/?sensor={{ sensor.pk }}&format=csv"
-             class="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 hover:underline">
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            All readings incl. raw (CSV)
-          </a>
-          {% endif %}
+          <div class="pt-1 space-y-1 border-t border-slate-100">
+            <p class="text-xs text-slate-400 mb-1">Quick downloads</p>
+            <a href="/api/v1/export/?sensors={{ sensor.pk }}&quality=GOOD&data_type=raw"
+               class="flex items-center gap-2 text-xs text-slate-600 hover:text-nao-blue">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Raw readings (CSV)
+            </a>
+            <a href="/api/v1/export/?sensors={{ sensor.pk }}&quality=GOOD&data_type=hourly"
+               class="flex items-center gap-2 text-xs text-slate-600 hover:text-nao-blue">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Hourly aggregates (CSV)
+            </a>
+            <a href="/api/v1/export/?sensors={{ sensor.pk }}&quality=GOOD&data_type=daily"
+               class="flex items-center gap-2 text-xs text-slate-600 hover:text-nao-blue">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Daily aggregates (CSV)
+            </a>
+          </div>
         </div>
       </div>
 
-      {# Installation notes — public #}
       {% if sensor.installation_notes %}
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
         <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Installation context</h2>
@@ -168,33 +206,125 @@
     </div>
 
     {# ════════════════════ RIGHT COLUMN — Charts ══════════════════════ #}
-    <div class="lg:col-span-2 space-y-6">
+    <div class="lg:col-span-2 space-y-4">
 
-      {# Time-series chart #}
-      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-sm font-semibold text-slate-700">PM₂.₅ time series</h2>
-          <div class="flex gap-2 text-xs">
-            <button onclick="setRange(1)"  class="range-btn" data-range="1">24h</button>
-            <button onclick="setRange(7)"  class="range-btn" data-range="7">7d</button>
-            <button onclick="setRange(30)" class="range-btn range-btn-active" data-range="30">30d</button>
+      {# Date range controls #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Date range</span>
+          <span id="live-badge"
+            class="hidden ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs
+                   bg-green-50 border border-green-200 text-green-700 font-medium">
+            <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block"></span>
+            Live · auto-refreshes
+          </span>
+          <span id="live-updated" class="hidden text-xs text-slate-400 ml-1"></span>
+          <div class="flex gap-1">
+            <button onclick="setWindow('1d')"  class="rng-btn" data-w="1d">1 day</button>
+            <button onclick="setWindow('7d')"  class="rng-btn rng-active" data-w="7d">7 days</button>
+            <button onclick="setWindow('30d')" class="rng-btn" data-w="30d">30 days</button>
+            <button onclick="setWindow('90d')" class="rng-btn" data-w="90d">90 days</button>
           </div>
+          <span class="text-slate-200 hidden sm:inline">|</span>
+          <div class="flex items-center gap-2 text-xs">
+            <label class="text-slate-400">From</label>
+            <input type="date" id="custom-start" class="border border-slate-200 rounded px-2 py-1 text-slate-600 text-xs">
+            <label class="text-slate-400">To</label>
+            <input type="date" id="custom-end"   class="border border-slate-200 rounded px-2 py-1 text-slate-600 text-xs">
+            <button onclick="applyCustom()" class="px-3 py-1 bg-nao-blue text-white rounded text-xs hover:opacity-90">Apply</button>
+          </div>
+          <span id="range-label" class="text-xs text-slate-400 ml-auto"></span>
         </div>
-        <canvas id="tsChart" height="240"></canvas>
       </div>
+
+      {# PM2.5 chart #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-slate-700">PM₂.₅ <span class="font-normal text-slate-400 text-xs">µg/m³</span></h2>
+          <span id="pts-PM25" class="text-xs text-slate-400"></span>
+        </div>
+        <div style="position:relative;height:280px"><canvas id="c-PM25"></canvas></div>
+        <p class="text-xs text-slate-400 mt-2">
+          <span class="inline-block w-5 border-t-2 border-dashed border-green-600 mr-1 align-middle"></span>WHO 15 µg/m³
+          &nbsp;
+          <span class="inline-block w-5 border-t-2 border-dashed border-amber-600 mr-1 align-middle"></span>Nepal NAAQS 40 µg/m³
+        </p>
+      </div>
+
+      {# PM10 chart #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-slate-700">PM₁₀ <span class="font-normal text-slate-400 text-xs">µg/m³</span></h2>
+          <span id="pts-PM10" class="text-xs text-slate-400"></span>
+        </div>
+        <div style="position:relative;height:220px"><canvas id="c-PM10"></canvas></div>
+      </div>
+
+      {# PM1 chart #}
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold text-slate-700">PM₁ <span class="font-normal text-slate-400 text-xs">µg/m³</span></h2>
+          <span id="pts-PM1" class="text-xs text-slate-400"></span>
+        </div>
+        <div style="position:relative;height:220px"><canvas id="c-PM1"></canvas></div>
+      </div>
+
+      {# Temperature + RH side by side #}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-slate-700">Temperature <span class="font-normal text-slate-400 text-xs">°C</span></h2>
+            <span id="pts-TEMP" class="text-xs text-slate-400"></span>
+          </div>
+          <div style="position:relative;height:200px"><canvas id="c-TEMP"></canvas></div>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-slate-700">Rel. Humidity <span class="font-normal text-slate-400 text-xs">%</span></h2>
+            <span id="pts-RH" class="text-xs text-slate-400"></span>
+          </div>
+          <div style="position:relative;height:200px"><canvas id="c-RH"></canvas></div>
+        </div>
+      </div>
+
+      {% if sensor.is_indoor %}
+      {# CO2 + TVOC side by side (indoor only) #}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-slate-700">CO₂ <span class="font-normal text-slate-400 text-xs">ppm</span></h2>
+            <span id="pts-CO2" class="text-xs text-slate-400"></span>
+          </div>
+          <div style="position:relative;height:200px"><canvas id="c-CO2"></canvas></div>
+          <p class="text-xs text-slate-400 mt-1">Dashed lines: outdoor ~400 ppm / poor ventilation 1000 ppm</p>
+        </div>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold text-slate-700">Total VOC <span class="font-normal text-slate-400 text-xs">mg/m³</span></h2>
+            <span id="pts-TVOC" class="text-xs text-slate-400"></span>
+          </div>
+          <div style="position:relative;height:200px"><canvas id="c-TVOC"></canvas></div>
+        </div>
+      </div>
+      {% endif %}
 
       {# Data completeness chart #}
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-3">
           <div>
-            <h2 class="text-sm font-semibold text-slate-700">Data completeness (last 30 days)</h2>
-            <p class="text-xs text-slate-400 mt-0.5">Fraction of expected readings received per day</p>
+            <h2 class="text-sm font-semibold text-slate-700">Data completeness (last 30 available days)</h2>
+            <p class="text-xs text-slate-400 mt-0.5">% of expected 1-minute readings received per day</p>
           </div>
         </div>
-        <canvas id="completenessChart" height="130"></canvas>
+        <div style="position:relative;height:130px"><canvas id="completenessChart"></canvas></div>
+        <p class="text-xs text-slate-400 mt-2">
+          <span class="text-green-600 font-medium">Green ≥ 80%</span> ·
+          <span class="text-yellow-600 font-medium">Yellow 50–80%</span> ·
+          <span class="text-red-500 font-medium">Red &lt; 50%</span>
+        </p>
       </div>
 
-      {# Maintenance log (public summary) #}
+      {# Maintenance log #}
       {% if maintenance_logs %}
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
         <h2 class="text-sm font-semibold text-slate-700 mb-4">Maintenance history</h2>
@@ -217,8 +347,8 @@
       {# Data quality note #}
       <div class="rounded-xl bg-amber-50 border border-amber-200 p-4 text-xs text-amber-800 leading-relaxed">
         <strong>Data quality note:</strong> Raw readings are flagged as GOOD, SUSPECT, BAD, or UNVALIDATED.
-        The chart above shows cleaned/validated values only. Gaps represent periods of sensor outage, power failure,
-        connectivity loss, or data flagged as suspect. Raw data is always preserved and never overwritten.
+        Charts show cleaned/validated values only. Gaps represent outages, power failure,
+        connectivity loss, or data flagged as suspect. Raw data is always preserved.
       </div>
 
     </div>
@@ -227,102 +357,293 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+.rng-btn {
+  font-size:0.7rem; padding:0.2rem 0.65rem; border-radius:9999px;
+  border:1px solid #e2e8f0; color:#64748b; background:#f8fafc; cursor:pointer;
+  transition:background .15s,color .15s;
+}
+.rng-btn:hover { background:#f1f5f9; color:#334155; }
+.rng-btn.rng-active { background:#2563eb; color:#fff; border-color:#2563eb; }
+</style>
+
 <script>
 const SENSOR_ID = {{ sensor.pk }};
+const IS_INDOOR = {{ sensor.is_indoor|yesno:"true,false" }};
+const SENSOR_COLOR = IS_INDOOR ? '#dc2626' : '#2563eb';
+const AVAIL_DATES = new Set({{ avail_dates_json|safe }});
 
-// ── Time-series chart ────────────────────────────────────────────────────────
-let tsChart;
+const PALETTE = {
+  PM25: '#2563eb', PM10: '#10b981', PM1: '#8b5cf6',
+  TEMP: '#f59e0b', RH:   '#06b6d4', CO2: '#f97316', TVOC: '#84cc16',
+};
+const UNITS = {
+  PM25:'µg/m³', PM10:'µg/m³', PM1:'µg/m³',
+  TEMP:'°C', RH:'%', CO2:'ppm', TVOC:'mg/m³',
+};
 
-async function loadTimeSeries(days) {
-  const end = new Date();
-  const start = new Date(end - days * 86400 * 1000);
-  const fmt = d => d.toISOString().slice(0, 19);
-  const url = `/api/v1/charts/sensor/${SENSOR_ID}/timeseries/?pollutant=PM25&start=${fmt(start)}&end=${fmt(end)}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data;
+let currentWindow = '7d';
+let customStart = null, customEnd = null;
+let charts = {};
+let liveInterval = null;
+
+function buildUrl(pollutant) {
+  const base = `/api/v1/charts/sensor/${SENSOR_ID}/timeseries/?pollutant=${pollutant}`;
+  if (customStart && customEnd)
+    return `${base}&start=${customStart}T00:00:00Z&end=${customEnd}T23:59:59Z`;
+  return `${base}&anchor=latest&window=${currentWindow}`;
 }
 
-async function initTimeSeries(days) {
-  const data = await loadTimeSeries(days);
-  const ctx = document.getElementById('tsChart').getContext('2d');
-  if (tsChart) tsChart.destroy();
-  tsChart = new Chart(ctx, {
+function guidelineDataset(labels, y, color, label) {
+  return { label, data: labels.map(()=>y),
+    borderColor: color, borderDash:[5,4], borderWidth:1.5,
+    pointRadius:0, fill:false };
+}
+
+async function loadChart(pollutant, extras) {
+  const resp = await fetch(buildUrl(pollutant));
+  if (!resp.ok) return;
+  const data = await resp.json();
+
+  const resolution = data.resolution || 'raw';
+  const timeUnit   = data.time_unit  || 'hour';
+
+  const badge = document.getElementById(`pts-${pollutant}`);
+  if (badge) {
+    const resLabel = resolution === 'raw' ? 'min' : resolution === 'hourly' ? 'hrly' : 'daily';
+    badge.textContent = data.total_points
+      ? `${data.total_points.toLocaleString()} pts · ${resLabel}`
+      : '';
+  }
+
+  if (pollutant === 'PM25' && data.data_start && data.data_end) {
+    const fmt = ts => new Date(ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    document.getElementById('range-label').textContent = `${fmt(data.data_start)} – ${fmt(data.data_end)}`;
+  }
+
+  const pts = (data.points||[]).map(p => ({ x: p.ts, y: p.value }));
+  const color = PALETTE[pollutant] || SENSOR_COLOR;
+
+  const canvas = document.getElementById(`c-${pollutant}`);
+  if (!canvas) return;
+  if (charts[pollutant]) { charts[pollutant].destroy(); delete charts[pollutant]; }
+
+  charts[pollutant] = new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
       datasets: [
-        {
-          label: 'PM₂.₅ (µg/m³)',
-          data: data.points || [],
-          borderColor: '{{ sensor.is_indoor|yesno:"#dc2626,#2563eb" }}',
-          backgroundColor: '{{ sensor.is_indoor|yesno:"rgba(220,38,38,.08),rgba(37,99,235,.08)" }}',
-          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.3,
-          parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+        { label: pollutant,
+          data: pts,
+          borderColor: color,
+          backgroundColor: color.replace(')', ',.08)').replace('rgb', 'rgba'),
+          borderWidth: resolution === 'raw' ? 1.2 : 1.8,
+          pointRadius: resolution === 'daily' ? 3 : (pts.length > 200 ? 0 : 2),
+          fill: true, tension: 0.2,
+          parsing: { xAxisKey:'x', yAxisKey:'y' },
+          spanGaps: false,
         },
-        {
-          label: 'WHO 24h (15 µg/m³)',
-          data: (data.points || []).map(p => ({ x: p.x, y: 15 })),
-          borderColor: '#16a34a', borderDash: [5, 4], borderWidth: 1.5,
-          pointRadius: 0, fill: false,
-        },
-        {
-          label: 'Nepal NAAQS (40 µg/m³)',
-          data: (data.points || []).map(p => ({ x: p.x, y: 40 })),
-          borderColor: '#b45309', borderDash: [3, 3], borderWidth: 1.5,
-          pointRadius: 0, fill: false,
-        },
+        ...(extras ? extras(pts.map(p=>p.x)) : []),
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      scales: {
-        x: { type: 'time', time: { unit: days <= 2 ? 'hour' : 'day' }, grid: { color: '#f1f5f9' } },
-        y: { beginAtZero: true, title: { display: true, text: 'µg/m³' }, grid: { color: '#f1f5f9' } }
+      interaction: { mode:'index', intersect:false },
+      plugins: {
+        legend: { display: !!(extras), labels:{ boxWidth:14, font:{size:11} } },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y != null ? c.parsed.y.toFixed(1) : '—'} ${UNITS[pollutant]||''}` } },
       },
-      plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } }, tooltip: { mode: 'index', intersect: false } }
-    }
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            unit: timeUnit,
+            tooltipFormat: resolution === 'daily' ? 'MMM d, yyyy' : 'MMM d, HH:mm',
+            displayFormats: { hour: 'HH:mm', day: 'MMM d', week: 'MMM d' },
+          },
+          grid: { color:'#f1f5f9' },
+          ticks: { font:{size:10}, maxTicksLimit: timeUnit === 'hour' ? 12 : 10 },
+        },
+        y: { beginAtZero: pollutant!=='TEMP', grid:{color:'#f1f5f9'},
+             ticks:{font:{size:10}},
+             title:{display:true, text:UNITS[pollutant]||'', font:{size:10}} },
+      },
+    },
   });
 }
 
 async function loadCompleteness() {
-  const url = `/api/v1/charts/sensor/${SENSOR_ID}/completeness/`;
-  const res = await fetch(url);
-  const data = await res.json();
-  const ctx = document.getElementById('completenessChart').getContext('2d');
-  new Chart(ctx, {
+  const resp = await fetch(`/api/v1/charts/sensor/${SENSOR_ID}/completeness/`);
+  if (!resp.ok) return;
+  const data = await resp.json();
+
+  // API returns either data.data or data.days — handle both shapes
+  const rows = data.data || data.days || [];
+  const getPct = r => r.completeness_pct != null ? r.completeness_pct : Math.round((r.completeness||0)*100);
+
+  if (charts['completeness']) { charts['completeness'].destroy(); }
+  charts['completeness'] = new Chart(
+    document.getElementById('completenessChart').getContext('2d'), {
     type: 'bar',
     data: {
-      labels: (data.days || []).map(d => d.date),
+      labels: rows.map(r => r.date),
       datasets: [{
-        label: 'Completeness (%)',
-        data: (data.days || []).map(d => Math.round(d.completeness * 100)),
-        backgroundColor: (data.days || []).map(d =>
-          d.completeness >= 0.8 ? '#22c55e' : d.completeness >= 0.5 ? '#f59e0b' : '#ef4444'
-        ),
-        borderRadius: 3, borderSkipped: false,
+        label: 'Completeness %',
+        data: rows.map(getPct),
+        backgroundColor: rows.map(r => getPct(r) >= 80 ? '#22c55e' : getPct(r) >= 50 ? '#eab308' : '#ef4444'),
+        borderRadius: 3,
       }]
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      scales: {
-        x: { grid: { display: false } },
-        y: { min: 0, max: 100, title: { display: true, text: '%' }, grid: { color: '#f1f5f9' } }
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ grid:{display:false}, ticks:{font:{size:10}} },
+        y:{ min:0, max:100, ticks:{callback:v=>v+'%', font:{size:10}}, grid:{color:'#f1f5f9'} },
       },
-      plugins: { legend: { display: false }, tooltip: { callbacks: {
-        label: c => `Completeness: ${c.parsed.y}%`
-      }}}
-    }
+    },
   });
 }
 
-// ── Range buttons ────────────────────────────────────────────────────────────
-function setRange(days) {
-  document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('range-btn-active'));
-  document.querySelector(`[data-range="${days}"]`).classList.add('range-btn-active');
-  initTimeSeries(days);
+function loadAllCharts() {
+  loadChart('PM25', labels => [
+    guidelineDataset(labels, 15, '#16a34a', 'WHO 24h (15)'),
+    guidelineDataset(labels, 40, '#b45309', 'Nepal NAAQS (40)'),
+  ]);
+  loadChart('PM10');
+  loadChart('PM1');
+  loadChart('TEMP');
+  loadChart('RH');
+  if (IS_INDOOR) {
+    loadChart('CO2', labels => [
+      guidelineDataset(labels, 400,  '#f97316', 'Outdoor ~400 ppm'),
+      guidelineDataset(labels, 1000, '#ef4444', 'Poor ventilation 1000 ppm'),
+    ]);
+    loadChart('TVOC');
+  }
 }
 
-initTimeSeries(30);
+function setWindow(w) {
+  currentWindow = w; customStart = null; customEnd = null;
+  document.getElementById('custom-start').value = '';
+  document.getElementById('custom-end').value   = '';
+  document.querySelectorAll('.rng-btn').forEach(b =>
+    b.classList.toggle('rng-active', b.dataset.w === w));
+
+  // Live auto-refresh only for 1-day window
+  clearInterval(liveInterval); liveInterval = null;
+  const liveBadge = document.getElementById('live-badge');
+  const liveUpdated = document.getElementById('live-updated');
+  if (w === '1d') {
+    liveBadge?.classList.remove('hidden');
+    liveUpdated?.classList.remove('hidden');
+    liveInterval = setInterval(() => {
+      loadAllCharts();
+      if (liveUpdated) liveUpdated.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }, 60000);
+  } else {
+    liveBadge?.classList.add('hidden');
+    liveUpdated?.classList.add('hidden');
+  }
+  loadAllCharts();
+}
+
+function applyCustom() {
+  const s = document.getElementById('custom-start').value;
+  const e = document.getElementById('custom-end').value;
+  if (!s || !e) return;
+  customStart = s; customEnd = e;
+  clearInterval(liveInterval); liveInterval = null;
+  document.getElementById('live-badge')?.classList.add('hidden');
+  document.querySelectorAll('.rng-btn').forEach(b => b.classList.remove('rng-active'));
+  loadAllCharts();
+}
+
+// ── 90-day availability grid ───────────────────────────────────────────────────
+function renderAvailGrid() {
+  const el = document.getElementById('avail-grid');
+  if (!el || !AVAIL_DATES.size) return;
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  // Start from Sunday of the week 13 weeks ago
+  const start = new Date(today);
+  start.setDate(today.getDate() - 89);
+  // rewind to Sunday
+  start.setDate(start.getDate() - start.getDay());
+
+  const weeks = [];
+  const cur = new Date(start);
+  while (cur <= today) {
+    const week = [];
+    for (let d = 0; d < 7; d++) {
+      const iso = cur.toISOString().slice(0, 10);
+      const isFuture = cur > today;
+      week.push({ iso, isFuture, hasData: AVAIL_DATES.has(iso) });
+      cur.setDate(cur.getDate() + 1);
+    }
+    weeks.push(week);
+  }
+
+  const DAY_LABELS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+  let html = '<div style="display:flex;gap:2px;align-items:flex-start">';
+  // day-of-week labels column
+  html += '<div style="display:flex;flex-direction:column;gap:2px;padding-top:14px">';
+  for (const lbl of ['','Mo','','We','','Fr','']) {
+    html += `<div style="font-size:9px;color:#94a3b8;height:10px;line-height:10px">${lbl}</div>`;
+  }
+  html += '</div>';
+  // weeks columns
+  for (const week of weeks) {
+    const monthLabel = week[0].iso.slice(5, 7) !== (weeks[0][0].iso.slice(5, 7)) || week === weeks[0]
+      ? new Date(week[0].iso + 'T00:00:00').toLocaleString('en', {month:'short'})
+      : '';
+    html += `<div style="display:flex;flex-direction:column;gap:2px">`;
+    html += `<div style="font-size:9px;color:#94a3b8;height:12px;text-align:center">${
+      week[0].iso.slice(8) === '01' || week === weeks[0]
+        ? new Date(week[0].iso + 'T00:00:00').toLocaleString('en',{month:'short'}) : ''
+    }</div>`;
+    for (const day of week) {
+      const bg = day.isFuture ? 'transparent' : day.hasData ? '#4ade80' : '#f1f5f9';
+      const border = day.isFuture ? 'none' : '1px solid #e2e8f0';
+      html += `<div title="${day.iso}" style="width:10px;height:10px;border-radius:2px;background:${bg};border:${border}"></div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+loadAllCharts();
 loadCompleteness();
+renderAvailGrid();
+
+// ── Auto-refresh when viewing a short window (≤1d) ────────────────────────
+const AUTO_REFRESH_SEC = 30;
+let _refreshTimer = null;
+let _lastRefresh = Date.now();
+
+function _startAutoRefresh() {
+  if (_refreshTimer) return;
+  document.getElementById('live-badge').classList.remove('hidden');
+  _refreshTimer = setInterval(() => {
+    loadAllCharts();
+    loadCompleteness();
+    _lastRefresh = Date.now();
+  }, AUTO_REFRESH_SEC * 1000);
+}
+
+function _stopAutoRefresh() {
+  if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+  document.getElementById('live-badge').classList.add('hidden');
+}
+
+// Start auto-refresh when viewing 1d window; stop for longer windows
+const _origSetWindow = setWindow;
+setWindow = function(w) {
+  _origSetWindow(w);
+  if (w === '1d') _startAutoRefresh(); else _stopAutoRefresh();
+};
+
+// Boot: auto-refresh is on for the default 7d window only in 1d, else off
+if (currentWindow === '1d') _startAutoRefresh();
 </script>
 {% endblock %}

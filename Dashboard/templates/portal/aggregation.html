@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Aggregation — Portal{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-12">
+
+  <div class="mb-8">
+    <a href="{% url 'portal:index' %}" class="text-sm text-slate-500 hover:text-slate-700">← Portal</a>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">Aggregate Readings</h1>
+    <p class="mt-1 text-sm text-slate-500">
+      Recomputes hourly and daily summary statistics from raw readings.
+      Run this after any large CSV upload or to refresh charts with recent live data.
+    </p>
+  </div>
+
+  {% if messages %}
+    {% for m in messages %}
+    <div class="mb-4 rounded-lg px-4 py-3 text-sm
+      {% if m.tags == 'success' %}bg-green-50 text-green-700 border border-green-200
+      {% elif m.tags == 'warning' %}bg-amber-50 text-amber-700 border border-amber-200
+      {% else %}bg-red-50 text-red-700 border border-red-200{% endif %}">
+      {{ m }}
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  {% if result %}
+  <div class="mb-8 rounded-xl border border-green-200 bg-green-50 p-5">
+    <h3 class="font-semibold text-sm text-green-800 mb-3">Aggregation results</h3>
+    <dl class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+      <div><dt class="text-xs text-slate-500">Sensors processed</dt><dd class="font-semibold text-slate-800">{{ result.sensors_processed }}</dd></div>
+      <div><dt class="text-xs text-slate-500">Hourly rows</dt><dd class="font-semibold text-slate-800">{{ result.hourly_rows }}</dd></div>
+      <div><dt class="text-xs text-slate-500">Daily rows</dt><dd class="font-semibold text-slate-800">{{ result.daily_rows }}</dd></div>
+      <div><dt class="text-xs text-slate-500">Errors</dt><dd class="font-semibold {% if result.errors %}text-red-600{% else %}text-slate-400{% endif %}">{{ result.errors }}</dd></div>
+    </dl>
+    {% if parquet_result %}
+    <p class="mt-3 text-xs text-green-700">
+      Parquet export: {{ parquet_result.rows_written|default:0 }} rows written to disk.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <form method="post" class="space-y-5">
+      {% csrf_token %}
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Sensor</label>
+        <select name="sensor_id"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+          <option value="">All sensors</option>
+          {% for s in sensors %}
+          <option value="{{ s.pk }}">{{ s.display_name }} ({{ s.serial_number }}) — {{ s.site.name|default:"?" }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Recompute from date (optional)</label>
+        <input type="date" name="since"
+               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+        <p class="mt-1 text-xs text-slate-400">Leave blank to recompute from the earliest reading. For large datasets, set a recent date to keep it fast.</p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="write_parquet" id="write_parquet" value="1"
+               class="rounded border-slate-300 text-nao-blue focus:ring-nao-blue">
+        <label for="write_parquet" class="text-sm text-slate-700">
+          Also export raw readings to Parquet files
+          <span class="text-xs text-slate-400">(requires RAW_DATA_DIR in settings)</span>
+        </label>
+      </div>
+
+      <div class="pt-2">
+        <button type="submit"
+                class="px-5 py-2.5 rounded-lg bg-nao-blue text-white text-sm font-semibold hover:bg-blue-700 transition-colors">
+          Run aggregation
+        </button>
+      </div>
+
+    </form>
+  </div>
+
+  <div class="mt-8 rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+    <h3 class="font-semibold text-slate-800 mb-2">About aggregation</h3>
+    <ul class="list-disc list-inside space-y-1 text-xs text-slate-600">
+      <li>Reads from <code>CanonicalReading</code> (GOOD and UNVALIDATED quality only).</li>
+      <li>Writes <code>HourlyAggregate</code> (one row per sensor × hour × pollutant) and <code>DailyAggregate</code>.</li>
+      <li>Uses <code>update_or_create</code> — safe to re-run multiple times.</li>
+      <li>Charts on the sensor detail and analysis pages read from these aggregate tables.</li>
+      <li>Schedule this via the Django admin → <em>Periodic tasks</em> (django-celery-beat).</li>
+      <li>API: <code>POST /api/v1/aggregate/</code> with a MAINTAINER/ADMIN key triggers the same computation.</li>
+    </ul>
+  </div>
+
+</div>
+{% endblock %}

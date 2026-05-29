@@ -2,8 +2,10 @@
 API views for the Nepal Air Quality Dashboard.
 
 Endpoints:
-  POST /api/v1/readings/             — submit readings (sensor API key)
+  POST /api/v1/readings/             — submit single-timestamp readings (sensor API key)
+  POST /api/v1/readings/batch/       — submit multiple timestamps (offline catch-up)
   GET  /api/v1/readings/             — query readings (researcher+ auth)
+  POST /api/v1/aggregate/            — trigger hourly/daily aggregation (maintainer/admin)
   GET  /api/v1/export/               — CSV/JSON export with access-level controls
   GET  /api/v1/sensors/              — list sensors (public)
   GET  /api/v1/sensors/{id}/         — sensor detail (public)
@@ -33,6 +35,7 @@ from apps.sensors.models import Sensor, Site
 
 from .permissions import HasResearcherPermission, HasSensorWritePermission, IsMaintainerOrAdmin
 from .serializers import (
+    BatchReadingSubmitSerializer,
     CanonicalReadingSerializer,
     ReadingSubmitSerializer,
     SensorRegisterSerializer,
@@ -44,13 +47,184 @@ logger = logging.getLogger(__name__)
 
 NEPAL_TZ = pytz.timezone("Asia/Kathmandu")
 
+# ── Wide-format export constants ───────────────────────────────────────────────
+
+# Maps internal pollutant codes → CSV column names (matching native sensor format)
+_WIDE_POLLUTANT_MAP = {
+    "PM1":   "PM1.0",
+    "PM25":  "PM2.5",
+    "PM4":   "PM4.0",
+    "PM10":  "PM10",
+    "CO2":   "CO2",
+    "CH2O":  "CH2O",
+    "BARO":  "Barometric Pressure",
+    "CO":    "CO",
+    "SO2":   "SO2",
+    "O3":    "O3",
+    "NO2":   "NO2",
+    "TVOC":  "VOC tVOC measurement",
+    "TEMP":  "Temperature",
+    "RH":    "Relative Humidity",
+    "NC05":  "PM0.5 NC",
+    "NC1":   "PM1.0 NC",
+    "NC25":  "PM2.5 NC",
+    "NC4":   "PM4.0 NC",
+    "NC10":  "PM10 NC",
+    "TYPSZ": "Typical Particle Size",
+}
+
+# Canonical column order for wide-format raw export
+_WIDE_COLUMN_ORDER = [
+    "Timestamp", "Device ID", "Serial Number", "Model", "Sub Model",
+    "Friendly Name", "Latitude", "Longitude", "Is Indoor", "Is Public",
+    "PM2.5 AQI", "PM10 AQI",
+    "PM1.0", "PM2.5",
+    "Applied PM2.5 Custom Calibration Setting - Multiplication Factor",
+    "Applied PM2.5 Custom Calibration Setting - Offset",
+    "PM4.0", "PM10",
+    "Applied PM10 Custom Calibration Setting - Multiplication Factor",
+    "Applied PM10 Custom Calibration Setting - Offset",
+    "PM0.5 NC", "PM1.0 NC", "PM2.5 NC", "PM4.0 NC", "PM10 NC",
+    "Typical Particle Size", "PM Sensor Status",
+    "CO2",
+    "Applied CO2 Custom Calibration Setting - Multiplication Factor",
+    "Applied CO2 Custom Calibration Setting - Offset",
+    "CO2 Sensor Status",
+    "CH2O",
+    "Applied CH2O Custom Calibration Setting - Multiplication Factor",
+    "Applied CH2O Custom Calibration Setting - Offset",
+    "CH2O Sensor Status",
+    "Barometric Pressure",
+    "Applied Barometric Pressure Custom Calibration Setting - Offset",
+    "Barometric Sensor Status",
+    "CO",
+    "Applied CO Custom Calibration Setting - Multiplication Factor",
+    "Applied CO Custom Calibration Setting - Offset",
+    "CO Sensor Status",
+    "SO2",
+    "Applied SO2 Custom Calibration Setting - Multiplication Factor",
+    "Applied SO2 Custom Calibration Setting - Offset",
+    "SO2 Sensor Status",
+    "O3",
+    "Applied O3 Custom Calibration Setting - Multiplication Factor",
+    "Applied O3 Custom Calibration Setting - Offset",
+    "O3 Sensor Status",
+    "NO2",
+    "Applied NO2 Custom Calibration Setting - Multiplication Factor",
+    "Applied NO2 Custom Calibration Setting - Offset",
+    "NO2 Sensor Status",
+    "VOC tVOC measurement",
+    "Applied TVOC Custom Calibration Setting - Multiplication Factor",
+    "Applied TVOC Custom Calibration Setting - Offset",
+    "VOC Sensor Status",
+    "Temperature",
+    "Applied Temperature Custom Calibration Setting - Offset",
+    "Relative Humidity",
+    "Applied Relative Humidity Custom Calibration Setting - Offset",
+    "Temperature/Humidity Sensor Status",
+    "System Status",
+]
+
+# Calibration offset columns use <nil> as their null placeholder (to match native format)
+_OFFSET_COLS = {c for c in _WIDE_COLUMN_ORDER if "Offset" in c}
+
+
+def _compute_pm25_aqi(v):
+    """US EPA PM2.5 AQI from µg/m³ concentration."""
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    breakpoints = [
+        (0.0,   12.0,   0,   50),
+        (12.1,  35.4,  51,  100),
+        (35.5,  55.4, 101,  150),
+        (55.5, 150.4, 151,  200),
+        (150.5, 250.4, 201, 300),
+        (250.5, 350.4, 301, 400),
+        (350.5, 500.4, 401, 500),
+    ]
+    for lo_c, hi_c, lo_i, hi_i in breakpoints:
+        if lo_c <= v <= hi_c:
+            return round((hi_i - lo_i) / (hi_c - lo_c) * (v - lo_c) + lo_i)
+    return None
+
+
+def _compute_pm10_aqi(v):
+    """US EPA PM10 AQI from µg/m³ concentration."""
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    breakpoints = [
+        (0,    54,   0,   50),
+        (55,  154,  51,  100),
+        (155, 254, 101,  150),
+        (255, 354, 151,  200),
+        (355, 424, 201,  300),
+        (425, 504, 301,  400),
+        (505, 604, 401,  500),
+    ]
+    for lo_c, hi_c, lo_i, hi_i in breakpoints:
+        if lo_c <= v <= hi_c:
+            return round((hi_i - lo_i) / (hi_c - lo_c) * (v - lo_c) + lo_i)
+    return None
+
+
+# Physical plausibility bounds per pollutant (lo, hi) — values outside are treated as sensor errors
+_PHYSICAL_BOUNDS: dict[str, tuple[float, float]] = {
+    "PM1":  (0, 500),  "PM25": (0, 500),  "PM4": (0, 600),  "PM10": (0, 700),
+    "TEMP": (-20, 60), "RH":   (0, 100),  "BARO": (25, 32),
+    "CO2":  (200, 6000), "TVOC": (0, 15), "CH2O": (0, 5),
+    "CO":   (0, 100),  "SO2":  (0, 2000), "O3":   (0, 600), "NO2":  (0, 2000),
+}
+
+
+def _filter_chart_outliers(values: list, pollutant: str) -> list:
+    """
+    Remove physically impossible values then apply Tukey outer fence (k=3·IQR).
+    Outliers are replaced with None so Chart.js renders a gap rather than a spike.
+    Raw data in the database is never modified.
+    """
+    lo, hi = _PHYSICAL_BOUNDS.get(pollutant, (None, None))
+
+    # Physical bounds pass
+    cleaned = []
+    for v in values:
+        if v is None:
+            cleaned.append(None)
+        elif (lo is not None and v < lo) or (hi is not None and v > hi):
+            cleaned.append(None)
+        else:
+            cleaned.append(v)
+
+    # IQR-based spike removal (needs ≥ 8 valid points to be meaningful)
+    valid = sorted(v for v in cleaned if v is not None)
+    if len(valid) < 8:
+        return cleaned
+
+    n = len(valid)
+    q1 = valid[n // 4]
+    q3 = valid[(3 * n) // 4]
+    iqr = q3 - q1
+    if iqr <= 0:
+        return cleaned
+
+    fence_lo = q1 - 3.0 * iqr
+    fence_hi = q3 + 3.0 * iqr
+    return [v if (v is None or fence_lo <= v <= fence_hi) else None for v in cleaned]
+
 
 # ── Readings ──────────────────────────────────────────────────────────────────
 
 class ReadingListView(APIView):
     """
     GET  /api/v1/readings/ — query readings
-    POST /api/v1/readings/ — submit readings from sensor
+    POST /api/v1/readings/ — submit readings from sensor (single timestamp)
     """
 
     def get_permissions(self):
@@ -113,8 +287,17 @@ class ReadingListView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        # Resolve serial_number: from payload OR from the bound sensor on the API key
+        data = serializer.validated_data
+        serial = data.get("serial_number", "").strip()
+        api_key = getattr(request, "api_key", None)
+        if not serial and api_key and api_key.sensor:
+            serial = api_key.sensor.serial_number
+            data = dict(data)
+            data["serial_number"] = serial
+
         converter = APIConverter()
-        result = converter.run(serializer.validated_data)
+        result = converter.run(data)
 
         if result["status"] == "FAILED":
             return Response(
@@ -123,6 +306,166 @@ class ReadingListView(APIView):
             )
 
         return Response(result, status=status.HTTP_201_CREATED)
+
+
+# ── Batch readings submission ─────────────────────────────────────────────────
+
+class BatchReadingView(APIView):
+    """
+    POST /api/v1/readings/batch/
+
+    Submit multiple timestamped snapshots in one request.  Designed for:
+    - Offline sensors catching up after a power/connectivity outage
+    - Scrapers pushing historical measurements
+    - Testing / data migration
+
+    The sensor is identified either by the ``serial_number`` field in the
+    payload or — if the API key is bound to a specific sensor — inferred
+    automatically.
+
+    Duplicate timestamps are handled gracefully: the DB unique constraint
+    silently skips exact duplicates; conflicts (same timestamp, different value)
+    are flagged and counted in the response.
+
+    Request body (JSON):
+    {
+        "serial_number": "81432434001",   // optional when key has linked sensor
+        "readings": [
+            {
+                "timestamp": "2026-05-29T08:00:00Z",
+                "measurements": [
+                    {"pollutant": "PM25", "value": 45.2, "unit": "µg/m³"},
+                    {"pollutant": "TEMP", "value": 18.5, "unit": "°C"}
+                ]
+            },
+            ...  // up to 10 000 snapshots per request
+        ]
+    }
+    """
+
+    permission_classes = [HasSensorWritePermission]
+
+    def post(self, request):
+        serializer = BatchReadingSubmitSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+
+        # Resolve sensor: from payload or from the API key
+        serial = data.get("serial_number", "").strip()
+        api_key = getattr(request, "api_key", None)
+
+        if not serial and api_key and api_key.sensor:
+            serial = api_key.sensor.serial_number
+
+        if not serial:
+            return Response(
+                {"error": "serial_number is required when the API key is not bound to a sensor."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            sensor = Sensor.objects.select_related("site").get(serial_number=serial)
+        except Sensor.DoesNotExist:
+            return Response(
+                {"error": f"Sensor '{serial}' not registered. Register it via the portal first."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # If key has a linked sensor, enforce it matches
+        if api_key and api_key.sensor and api_key.sensor.serial_number != serial:
+            return Response(
+                {"error": "API key is scoped to a different sensor."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from apps.readings.models import IngestionLog
+
+        converter = APIConverter()
+        all_records = []
+
+        for snapshot in data["readings"]:
+            ts_str = snapshot["timestamp"].isoformat()
+            single_payload = {
+                "serial_number": serial,
+                "timestamp": ts_str,
+                "readings": [
+                    {"pollutant": m["pollutant"], "value": m["value"], "unit": m["unit"]}
+                    for m in snapshot["measurements"]
+                ],
+            }
+            df = converter._read_source(single_payload)
+            records = converter.map_columns(df)
+            records = converter.assign_quality_flags(records)
+            for rec in records:
+                rec["sensor_id"] = sensor.pk
+                rec["site_id"] = sensor.site_id
+                rec["is_indoor"] = sensor.is_indoor
+            all_records.extend(records)
+
+        if not all_records:
+            return Response({"saved": 0, "duplicates": 0, "errors": 0, "snapshots": 0},
+                            status=status.HTTP_200_OK)
+
+        result = converter.save_to_canonical_schema(all_records)
+
+        IngestionLog.objects.create(
+            source_name="BatchAPIConverter",
+            status=IngestionLog.Status.SUCCESS if result["errors"] == 0 else IngestionLog.Status.PARTIAL,
+            records_attempted=len(all_records),
+            records_saved=result["saved"],
+            records_duplicate=result["duplicates"],
+            records_error=result["errors"],
+        )
+
+        return Response(
+            {
+                "snapshots": len(data["readings"]),
+                "measurements_attempted": len(all_records),
+                "saved": result["saved"],
+                "duplicates": result["duplicates"],
+                "errors": result["errors"],
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+# ── Aggregation trigger ───────────────────────────────────────────────────────
+
+class AggregationTriggerView(APIView):
+    """
+    POST /api/v1/aggregate/
+
+    Trigger a synchronous recompute of HourlyAggregate and DailyAggregate.
+    Requires MAINTAINER or ADMIN API key.
+
+    Body (JSON, all optional):
+    {
+        "sensor_id": 1,           // omit to aggregate all sensors
+        "since": "2026-01-01"     // ISO date; omit to recompute everything
+    }
+
+    Response: {"sensors_processed":N, "hourly_rows":N, "daily_rows":N, "errors":N}
+    """
+
+    permission_classes = [IsMaintainerOrAdmin]
+
+    def post(self, request):
+        from apps.ingestion.tasks import compute_aggregates
+        from datetime import datetime, timezone as dt_tz
+
+        sensor_id = request.data.get("sensor_id")
+        since_str = request.data.get("since")
+        since = None
+        if since_str:
+            try:
+                since = datetime.fromisoformat(since_str).replace(tzinfo=dt_tz.utc)
+            except ValueError:
+                return Response({"error": f"Invalid 'since' date: {since_str}"}, status=400)
+
+        result = compute_aggregates(sensor_id=sensor_id, since=since)
+        return Response(result)
 
 
 # ── Sensors ───────────────────────────────────────────────────────────────────
@@ -225,64 +568,199 @@ class TimeSeriesChartView(APIView):
 
     Query params:
       pollutant  (required) — e.g. PM25
-      start      (optional) — ISO 8601
-      end        (optional) — ISO 8601
-      quality    (optional) — GOOD|SUSPECT|BAD|UNVALIDATED (default: GOOD,UNVALIDATED)
-      resample   (optional) — hourly|daily (default: raw, max 2000 points)
+      start      (optional) — ISO 8601 datetime
+      end        (optional) — ISO 8601 datetime
+      window     (optional) — 1d|7d|30d|90d (used when anchor=latest)
+      anchor     (optional) — "now" (default) | "latest" (anchor window to last reading)
+
+    Resolution is chosen automatically from the requested span:
+      ≤ 2 days   → raw minute data (outlier-filtered, max 2 000 points)
+      ≤ 60 days  → HourlyAggregate (falls back to raw if aggregates absent)
+      > 60 days  → DailyAggregate  (falls back to raw if aggregates absent)
+
+    Returns extra fields: resolution ("raw"|"hourly"|"daily"), time_unit (Chart.js hint).
     """
 
     permission_classes = [AllowAny]
 
+    # Resolution thresholds (days)
+    _HOURLY_THRESHOLD = 2
+    _DAILY_THRESHOLD  = 60
+
     def get(self, request, sensor_id):
+        from datetime import datetime as _dt
+        import dateutil.parser as _dp
+
         pollutant = request.query_params.get("pollutant", "PM25").upper()
-        start = request.query_params.get("start")
-        end = request.query_params.get("end")
-        resample = request.query_params.get("resample", "raw")
+        start_raw = request.query_params.get("start")
+        end_raw   = request.query_params.get("end")
+        anchor    = request.query_params.get("anchor", "now")
+        window    = request.query_params.get("window", "7d")
 
         try:
             sensor = Sensor.objects.get(pk=sensor_id)
         except Sensor.DoesNotExist:
             return Response({"error": "Sensor not found."}, status=404)
 
-        qs = CanonicalReading.objects.filter(
-            sensor=sensor,
-            pollutant=pollutant,
-            is_duplicate=False,
-        ).order_by("original_ts")
+        # ── Determine time bounds ────────────────────────────────────────────
+        base_qs = CanonicalReading.objects.filter(
+            sensor=sensor, pollutant=pollutant, is_duplicate=False,
+        )
 
-        if start:
-            qs = qs.filter(original_ts__gte=start)
-        if end:
-            qs = qs.filter(original_ts__lte=end)
+        if start_raw or end_raw:
+            start_ts = _dp.parse(start_raw).replace(tzinfo=timezone.utc) if start_raw else None
+            end_ts   = _dp.parse(end_raw).replace(tzinfo=timezone.utc)   if end_raw   else None
+            if start_ts and not timezone.is_aware(start_ts):
+                start_ts = timezone.make_aware(start_ts)
+            if end_ts and not timezone.is_aware(end_ts):
+                end_ts = timezone.make_aware(end_ts)
         else:
-            # Default: last 7 days
-            qs = qs.filter(original_ts__gte=timezone.now() - timedelta(days=7))
+            window_days = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}.get(window, 7)
+            if anchor == "latest":
+                latest_ts = base_qs.aggregate(max_ts=Max("original_ts"))["max_ts"]
+                end_ts = latest_ts or timezone.now()
+            else:
+                end_ts = timezone.now()
+            start_ts = end_ts - timedelta(days=window_days)
 
-        # Return raw values (limited for performance)
-        MAX_POINTS = 2000
-        total = qs.count()
-        if total > MAX_POINTS:
-            # Uniform subsampling
-            step = total // MAX_POINTS
-            ids = list(qs.values_list("id", flat=True)[::step])
-            qs = CanonicalReading.objects.filter(id__in=ids).order_by("original_ts")
+        # span used for resolution selection
+        if start_ts and end_ts:
+            span_days = max(1, (end_ts - start_ts).total_seconds() / 86400)
+        else:
+            span_days = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}.get(window, 7)
 
-        data = [
-            {
-                "ts": r.original_ts.isoformat(),
-                "value": r.effective_value,
-                "quality_flag": r.quality_flag,
-            }
-            for r in qs
-        ]
+        # ── Choose resolution ────────────────────────────────────────────────
+        if span_days <= self._HOURLY_THRESHOLD:
+            resolution = "raw"
+            time_unit  = "hour"
+        elif span_days <= self._DAILY_THRESHOLD:
+            resolution = "hourly"
+            time_unit  = "day"
+        else:
+            resolution = "daily"
+            time_unit  = "week"
+
+        # ── Build chart data by resolution ───────────────────────────────────
+        data = self._fetch_data(
+            resolution, sensor, pollutant, start_ts, end_ts, base_qs,
+        )
+
+        # Return total_points as count of original raw rows for the badge label
+        total = base_qs.filter(
+            original_ts__gte=start_ts, original_ts__lte=end_ts,
+        ).count() if start_ts and end_ts else len(data)
 
         return Response({
-            "sensor_id": sensor.pk,
-            "sensor_name": sensor.display_name,
-            "pollutant": pollutant,
+            "sensor_id":    sensor.pk,
+            "sensor_name":  sensor.display_name,
+            "pollutant":    pollutant,
+            "resolution":   resolution,
+            "time_unit":    time_unit,
             "total_points": total,
-            "points": data,
+            "points":       data,
+            "data_start":   data[0]["ts"]  if data else None,
+            "data_end":     data[-1]["ts"] if data else None,
         })
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _fetch_data(self, resolution, sensor, pollutant, start_ts, end_ts, base_qs):
+        if resolution == "hourly":
+            data = self._fetch_hourly(sensor, pollutant, start_ts, end_ts)
+            if data:
+                return data
+            # Fall back to raw if no hourly aggregates exist yet
+        if resolution == "daily":
+            data = self._fetch_daily(sensor, pollutant, start_ts, end_ts)
+            if data:
+                return data
+
+        # Raw path (also fallback for hourly/daily when aggregates are empty)
+        return self._fetch_raw(base_qs, pollutant, start_ts, end_ts)
+
+    def _fetch_raw(self, base_qs, pollutant, start_ts, end_ts):
+        # For recent (≤2 day) windows, CanonicalReading holds live data and is fast.
+        # For historical data, fall through to DuckDB.
+        qs = base_qs.order_by("original_ts")
+        if start_ts:
+            qs = qs.filter(original_ts__gte=start_ts)
+        if end_ts:
+            qs = qs.filter(original_ts__lte=end_ts)
+
+        if qs.exists():
+            MAX_POINTS = 2000
+            total = qs.count()
+            if total > MAX_POINTS:
+                step = max(1, total // MAX_POINTS)
+                ids = list(qs.values_list("id", flat=True)[::step])
+                qs = CanonicalReading.objects.filter(id__in=ids).order_by("original_ts")
+            rows = list(qs.values("original_ts", "raw_value"))
+            values = [r["raw_value"] for r in rows]
+            timestamps = [r["original_ts"].isoformat() for r in rows]
+            filtered = _filter_chart_outliers(values, pollutant)
+            return [{"ts": ts, "value": v} for ts, v in zip(timestamps, filtered)]
+
+        # DuckDB fallback — historical data not in CanonicalReading
+        try:
+            from apps.ingestion.raw_store import raw_store
+            first = base_qs.values("sensor_id").first()
+            if first:
+                df = raw_store.query_range(
+                    sensor_id=first["sensor_id"], pollutant=pollutant,
+                    start=start_ts, end=end_ts, limit=5000,
+                )
+                if not df.empty:
+                    values = df["value"].tolist()
+                    timestamps = df["ts"].dt.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
+                    filtered = _filter_chart_outliers(values, pollutant)
+                    return [{"ts": ts, "value": v} for ts, v in zip(timestamps, filtered)]
+        except Exception as exc:
+            logger.warning("TimeSeriesChartView: DuckDB query failed: %s", exc)
+
+        return []
+
+    def _fetch_hourly(self, sensor, pollutant, start_ts, end_ts):
+        from apps.readings.models import HourlyAggregate
+        qs = (
+            HourlyAggregate.objects
+            .filter(sensor=sensor, pollutant=pollutant)
+            .order_by("hour")
+        )
+        if start_ts:
+            qs = qs.filter(hour__gte=start_ts)
+        if end_ts:
+            qs = qs.filter(hour__lte=end_ts)
+        rows = list(qs.values("hour", "mean"))
+        if not rows:
+            return []
+        values = [r["mean"] for r in rows]
+        timestamps = [r["hour"].isoformat() for r in rows]
+        filtered = _filter_chart_outliers(values, pollutant)
+        return [{"ts": ts, "value": v} for ts, v in zip(timestamps, filtered)]
+
+    def _fetch_daily(self, sensor, pollutant, start_ts, end_ts):
+        import datetime as _datetime
+        from apps.readings.models import DailyAggregate
+        qs = (
+            DailyAggregate.objects
+            .filter(sensor=sensor, pollutant=pollutant)
+            .order_by("date")
+        )
+        if start_ts:
+            qs = qs.filter(date__gte=start_ts.date())
+        if end_ts:
+            qs = qs.filter(date__lte=end_ts.date())
+        rows = list(qs.values("date", "mean"))
+        if not rows:
+            return []
+        values = [r["mean"] for r in rows]
+        timestamps = [
+            _datetime.datetime(r["date"].year, r["date"].month, r["date"].day,
+                               tzinfo=_datetime.timezone.utc).isoformat()
+            for r in rows
+        ]
+        filtered = _filter_chart_outliers(values, pollutant)
+        return [{"ts": ts, "value": v} for ts, v in zip(timestamps, filtered)]
 
 
 class CompletenessChartView(APIView):
@@ -290,7 +768,7 @@ class CompletenessChartView(APIView):
     GET /api/v1/charts/sensor/{id}/completeness/
 
     Returns daily completeness fractions for the last 30 days.
-    Assumes ~96 readings/day at 15-minute intervals.
+    Source: DailyAggregate (falls back to DuckDB raw counts if no aggregates yet).
     """
 
     permission_classes = [AllowAny]
@@ -301,33 +779,53 @@ class CompletenessChartView(APIView):
         except Sensor.DoesNotExist:
             return Response({"error": "Sensor not found."}, status=404)
 
-        expected_per_day = int(request.query_params.get("expected", 96))
+        expected_per_day = int(request.query_params.get("expected", 1440))  # 1-min data
         days = int(request.query_params.get("days", 30))
+        cutoff = timezone.now() - timedelta(days=days)
 
-        from django.db.models.functions import TruncDate
-        qs = (
-            CanonicalReading.objects
-            .filter(
-                sensor=sensor,
-                pollutant="PM25",
-                is_duplicate=False,
-                original_ts__gte=timezone.now() - timedelta(days=days),
-            )
-            .annotate(date=TruncDate("original_ts"))
-            .values("date")
-            .annotate(count=Count("id"))
+        from apps.readings.models import DailyAggregate
+
+        agg_qs = (
+            DailyAggregate.objects
+            .filter(sensor=sensor, pollutant="PM25", date__gte=cutoff.date())
             .order_by("date")
+            .values("date", "count", "completeness")
         )
+        rows = list(agg_qs)
 
-        data = [
-            {
-                "date": str(row["date"]),
-                "expected": expected_per_day,
-                "actual": row["count"],
-                "completeness_pct": round(min(100, row["count"] / expected_per_day * 100), 1),
-            }
-            for row in qs
-        ]
+        if rows:
+            data = [
+                {
+                    "date": str(r["date"]),
+                    "expected": expected_per_day,
+                    "actual": r["count"],
+                    "completeness_pct": round(
+                        float(r["completeness"]) * 100, 1
+                    ) if r["completeness"] is not None else round(
+                        min(100, r["count"] / expected_per_day * 100), 1
+                    ),
+                }
+                for r in rows
+            ]
+        else:
+            # Fallback to DuckDB raw count if aggregates haven't been computed yet
+            try:
+                from apps.ingestion.raw_store import raw_store
+                df = raw_store.count_by_day(sensor_id=sensor.pk, pollutant="PM25",
+                                            start=cutoff)
+                data = [
+                    {
+                        "date": str(row["date"]),
+                        "expected": expected_per_day,
+                        "actual": int(row["cnt"]),
+                        "completeness_pct": round(
+                            min(100, int(row["cnt"]) / expected_per_day * 100), 1
+                        ),
+                    }
+                    for _, row in df.iterrows()
+                ]
+            except Exception:
+                data = []
 
         return Response({
             "sensor_id": sensor.pk,
@@ -351,43 +849,54 @@ class NationalSummaryChartView(APIView):
         WHO_24H = 15.0      # WHO 2021 24-hour guideline µg/m³
         NEPAL_24H = 40.0    # Nepal NAAQS 24-hour standard µg/m³
 
+        from apps.readings.models import DailyAggregate, HourlyAggregate
+
         sensors = Sensor.objects.filter(status="ACTIVE").select_related("site")
+        cutoff_24h = timezone.now() - timedelta(hours=24)
         summary = []
 
         for sensor in sensors:
-            latest = (
-                CanonicalReading.objects
-                .filter(sensor=sensor, pollutant="PM25", is_duplicate=False, quality_flag__in=["GOOD", "UNVALIDATED"])
-                .order_by("-original_ts")
+            # Latest daily aggregate for recent PM2.5
+            latest_daily = (
+                DailyAggregate.objects
+                .filter(sensor=sensor, pollutant="PM25")
+                .order_by("-date")
                 .first()
             )
 
-            avg_24h = (
-                CanonicalReading.objects
-                .filter(
-                    sensor=sensor,
-                    pollutant="PM25",
-                    is_duplicate=False,
-                    quality_flag__in=["GOOD"],
-                    original_ts__gte=timezone.now() - timedelta(hours=24),
-                )
-                .aggregate(avg=Avg("raw_value"))["avg"]
+            # 24-hour average from hourly aggregates
+            avg_24h_agg = (
+                HourlyAggregate.objects
+                .filter(sensor=sensor, pollutant="PM25", hour__gte=cutoff_24h)
+                .aggregate(avg=Avg("mean"))["avg"]
             )
+            # Fall back to daily aggregate if no hourly data in last 24h
+            if avg_24h_agg is None and latest_daily:
+                avg_24h_agg = latest_daily.mean
+
+            latest_val = latest_daily.mean if latest_daily else None
+            latest_ts  = None
+            if latest_daily:
+                import datetime as _dt
+                latest_ts = _dt.datetime(
+                    latest_daily.date.year, latest_daily.date.month, latest_daily.date.day,
+                    tzinfo=_dt.timezone.utc,
+                ).isoformat()
 
             summary.append({
-                "sensor_id": sensor.pk,
-                "sensor_name": sensor.display_name,
-                "site_name": sensor.site.name,
-                "site_district": sensor.site.district,
-                "latitude": sensor.site.latitude,
-                "longitude": sensor.site.longitude,
-                "is_indoor": sensor.is_indoor,
-                "status": sensor.status,
-                "latest_pm25": latest.effective_value if latest else None,
-                "latest_ts": latest.original_ts.isoformat() if latest else None,
-                "avg_pm25_24h": round(avg_24h, 1) if avg_24h else None,
-                "exceeds_who_24h": (avg_24h > WHO_24H) if avg_24h else None,
-                "exceeds_nepal_24h": (avg_24h > NEPAL_24H) if avg_24h else None,
+                "sensor_id":       sensor.pk,
+                "sensor_name":     sensor.display_name,
+                "site_name":       sensor.site.name,
+                "site_district":   sensor.site.district,
+                "latitude":        sensor.site.latitude,
+                "longitude":       sensor.site.longitude,
+                "is_indoor":       sensor.is_indoor,
+                "status":          sensor.status,
+                "latest_pm25":     round(latest_val, 1) if latest_val is not None else None,
+                "latest_ts":       latest_ts,
+                "avg_pm25_24h":    round(avg_24h_agg, 1) if avg_24h_agg else None,
+                "exceeds_who_24h":   (avg_24h_agg > WHO_24H) if avg_24h_agg else None,
+                "exceeds_nepal_24h": (avg_24h_agg > NEPAL_24H) if avg_24h_agg else None,
             })
 
         return Response({
@@ -406,7 +915,8 @@ class SensorDateRangeView(APIView):
     """
     GET /api/v1/charts/sensor/{id}/date-range/?pollutant=PM25
 
-    Returns min/max timestamps for a sensor so the UI can populate date pickers.
+    Returns min/max dates from DailyAggregate (falls back to CanonicalReading
+    for data loaded before the DuckDB migration).
     """
     permission_classes = [AllowAny]
 
@@ -417,17 +927,37 @@ class SensorDateRangeView(APIView):
             return Response({"error": "Sensor not found."}, status=404)
 
         pollutant = request.query_params.get("pollutant", "PM25").upper()
-        agg = CanonicalReading.objects.filter(
-            sensor=sensor, pollutant=pollutant, is_duplicate=False,
-        ).aggregate(min_ts=Min("original_ts"), max_ts=Max("original_ts"))
+
+        from apps.readings.models import DailyAggregate
+        agg = DailyAggregate.objects.filter(
+            sensor=sensor, pollutant=pollutant,
+        ).aggregate(min_date=Min("date"), max_date=Max("date"))
+
+        min_date = agg["min_date"]
+        max_date = agg["max_date"]
+
+        # Legacy fallback for pre-migration data still in CanonicalReading
+        if not min_date:
+            cr_agg = CanonicalReading.objects.filter(
+                sensor=sensor, pollutant=pollutant, is_duplicate=False,
+            ).aggregate(min_ts=Min("original_ts"), max_ts=Max("original_ts"))
+            if cr_agg["min_ts"]:
+                min_date = cr_agg["min_ts"].date()
+                max_date = cr_agg["max_ts"].date()
+
+        import datetime as _dt
+        def _to_iso_ts(d):
+            if d is None:
+                return None
+            return _dt.datetime(d.year, d.month, d.day, tzinfo=_dt.timezone.utc).isoformat()
 
         return Response({
             "sensor_id": sensor.pk,
             "pollutant": pollutant,
-            "min_ts": agg["min_ts"].isoformat() if agg["min_ts"] else None,
-            "max_ts": agg["max_ts"].isoformat() if agg["max_ts"] else None,
-            "min_date": agg["min_ts"].date().isoformat() if agg["min_ts"] else None,
-            "max_date": agg["max_ts"].date().isoformat() if agg["max_ts"] else None,
+            "min_ts":   _to_iso_ts(min_date),
+            "max_ts":   _to_iso_ts(max_date),
+            "min_date": min_date.isoformat() if min_date else None,
+            "max_date": max_date.isoformat() if max_date else None,
         })
 
 
@@ -435,8 +965,8 @@ class DiurnalChartView(APIView):
     """
     GET /api/v1/charts/sensor/{id}/diurnal/
 
-    Returns hour-of-day (0–23, Nepal Standard Time = UTC+5:45) median PM values
-    for use in diurnal profile charts.
+    Hour-of-day profile (0–23 NST) computed from HourlyAggregate.
+    NST = UTC + 5h 45m, so UTC hour H → NST hour (H + 5) % 24.
 
     Query params:
       pollutant  — PM25 (default)
@@ -445,10 +975,8 @@ class DiurnalChartView(APIView):
     """
     permission_classes = [AllowAny]
 
-    NST_MINUTES = 5 * 60 + 45  # 345 minutes east of UTC
-
     def get(self, request, sensor_id):
-        from django.db.models import Avg
+        from django.db.models.functions import ExtractHour
         try:
             sensor = Sensor.objects.get(pk=sensor_id)
         except Sensor.DoesNotExist:
@@ -458,43 +986,52 @@ class DiurnalChartView(APIView):
         start = request.query_params.get("start")
         end = request.query_params.get("end")
 
-        qs = CanonicalReading.objects.filter(
-            sensor=sensor, pollutant=pollutant, is_duplicate=False,
-            quality_flag__in=["GOOD", "UNVALIDATED"],
-        )
+        from apps.readings.models import HourlyAggregate
+
+        qs = HourlyAggregate.objects.filter(sensor=sensor, pollutant=pollutant)
         if start:
-            qs = qs.filter(original_ts__gte=start)
+            qs = qs.filter(hour__date__gte=start)
         if end:
-            qs = qs.filter(original_ts__lte=end)
+            qs = qs.filter(hour__date__lte=end)
         else:
-            qs = qs.filter(original_ts__gte=timezone.now() - timedelta(days=90))
+            qs = qs.filter(hour__gte=timezone.now() - timedelta(days=90))
 
-        # Group by NST hour using extra() for SQLite and PostgreSQL compatibility
-        # NST = UTC + 5h45m = +345 minutes
-        rows = (
-            qs.extra(
-                select={"nst_hour": (
-                    "CAST(((CAST(strftime('%%H', original_ts) AS INTEGER) * 60 "
-                    "+ CAST(strftime('%%M', original_ts) AS INTEGER) + 345) / 60) %% 24 AS INTEGER)"
-                )}
-            )
-            .values("nst_hour")
-            .annotate(avg=Avg("raw_value"), count=Count("id"))
-            .order_by("nst_hour")
+        # Pull utc_hour + mean + count; group into NST hours in Python
+        raw = (
+            qs.annotate(utc_h=ExtractHour("hour"))
+            .values("utc_h", "mean", "count")
         )
 
-        by_hour = {r["nst_hour"]: {"avg": r["avg"], "count": r["count"]} for r in rows}
+        by_nst: dict = {}
+        for row in raw:
+            nst_h = (row["utc_h"] + 5) % 24  # UTC+5:45; 45-min offset rounds to +5h at boundary
+            if nst_h not in by_nst:
+                by_nst[nst_h] = {"wsum": 0.0, "cnt": 0}
+            if row["mean"] is not None and row["count"]:
+                by_nst[nst_h]["wsum"] += float(row["mean"]) * int(row["count"])
+                by_nst[nst_h]["cnt"]  += int(row["count"])
+
         hours = list(range(24))
+        values = []
+        counts = []
+        for h in hours:
+            entry = by_nst.get(h)
+            if entry and entry["cnt"] > 0:
+                values.append(round(entry["wsum"] / entry["cnt"], 2))
+                counts.append(entry["cnt"])
+            else:
+                values.append(None)
+                counts.append(0)
 
         return Response({
-            "sensor_id": sensor.pk,
+            "sensor_id":   sensor.pk,
             "sensor_name": sensor.display_name,
-            "pollutant": pollutant,
-            "hours": hours,
-            "labels": [f"{h:02d}:00" for h in hours],
-            "values": [round(by_hour[h]["avg"], 2) if h in by_hour and by_hour[h]["avg"] else None for h in hours],
-            "counts": [by_hour.get(h, {}).get("count", 0) for h in hours],
-            "note": "Hours in Nepal Standard Time (UTC+5:45). Values are per-hour medians.",
+            "pollutant":   pollutant,
+            "hours":       hours,
+            "labels":      [f"{h:02d}:00" for h in hours],
+            "values":      values,
+            "counts":      counts,
+            "note": "Hours in Nepal Standard Time (UTC+5:45). Values are count-weighted hourly means.",
         })
 
 
@@ -502,7 +1039,7 @@ class MonthlyChartView(APIView):
     """
     GET /api/v1/charts/sensor/{id}/monthly/
 
-    Returns monthly average + max per pollutant.
+    Returns monthly average + max per pollutant, sourced from DailyAggregate.
 
     Query params:
       pollutant  — PM25 (default)
@@ -510,8 +1047,9 @@ class MonthlyChartView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, sensor_id):
-        from django.db.models import Avg, Max
+        from django.db.models import Avg, Max, Sum
         from django.db.models.functions import TruncMonth
+        from apps.readings.models import DailyAggregate
 
         try:
             sensor = Sensor.objects.get(pk=sensor_id)
@@ -520,27 +1058,33 @@ class MonthlyChartView(APIView):
 
         pollutant = request.query_params.get("pollutant", "PM25").upper()
 
-        rows = (
-            CanonicalReading.objects
-            .filter(sensor=sensor, pollutant=pollutant, is_duplicate=False,
-                    quality_flag__in=["GOOD", "UNVALIDATED"])
-            .annotate(month=TruncMonth("original_ts"))
+        # Group DailyAggregate rows by calendar month using count-weighted average
+        rows = list(
+            DailyAggregate.objects
+            .filter(sensor=sensor, pollutant=pollutant)
+            .annotate(month=TruncMonth("date"))
             .values("month")
-            .annotate(avg=Avg("raw_value"), max_val=Max("raw_value"), count=Count("id"))
+            .annotate(
+                avg=Avg("mean"),
+                max_val=Max("max_value"),
+                total_count=Sum("count"),
+            )
             .order_by("month")
         )
 
         months = [str(r["month"])[:7] for r in rows]
-        avgs = [round(r["avg"], 1) if r["avg"] else None for r in rows]
-        maxs = [round(r["max_val"], 1) if r["max_val"] else None for r in rows]
+        avgs   = [round(float(r["avg"]), 1) if r["avg"] is not None else None for r in rows]
+        maxs   = [round(float(r["max_val"]), 1) if r["max_val"] is not None else None for r in rows]
+        counts = [int(r["total_count"]) if r["total_count"] else 0 for r in rows]
 
         return Response({
-            "sensor_id": sensor.pk,
+            "sensor_id":   sensor.pk,
             "sensor_name": sensor.display_name,
-            "pollutant": pollutant,
-            "months": months,
-            "avg": avgs,
-            "max": maxs,
+            "pollutant":   pollutant,
+            "months":      months,
+            "avg":         avgs,
+            "max":         maxs,
+            "counts":      counts,
         })
 
 
@@ -575,30 +1119,37 @@ class IOComparisonView(APIView):
         end = request.query_params.get("end")
 
         def diurnal(sensor):
-            qs = CanonicalReading.objects.filter(
-                sensor=sensor, pollutant=pollutant, is_duplicate=False,
-                quality_flag__in=["GOOD", "UNVALIDATED"],
-            )
-            if start:
-                qs = qs.filter(original_ts__gte=start)
-            if end:
-                qs = qs.filter(original_ts__lte=end)
-            else:
-                qs = qs.filter(original_ts__gte=timezone.now() - timedelta(days=90))
+            from django.db.models.functions import ExtractHour
+            from apps.readings.models import HourlyAggregate
 
-            rows = (
-                qs.extra(
-                    select={"nst_hour": (
-                        "CAST(((CAST(strftime('%%H', original_ts) AS INTEGER) * 60 "
-                        "+ CAST(strftime('%%M', original_ts) AS INTEGER) + 345) / 60) %% 24 AS INTEGER)"
-                    )}
-                )
-                .values("nst_hour")
-                .annotate(avg=Avg("raw_value"))
-                .order_by("nst_hour")
-            )
-            by_hour = {r["nst_hour"]: r["avg"] for r in rows}
-            return [round(by_hour[h], 2) if h in by_hour and by_hour[h] else None for h in range(24)]
+            qs = HourlyAggregate.objects.filter(sensor=sensor, pollutant=pollutant)
+            if start:
+                qs = qs.filter(hour__date__gte=start)
+            if end:
+                qs = qs.filter(hour__date__lte=end)
+            else:
+                qs = qs.filter(hour__gte=timezone.now() - timedelta(days=90))
+
+            raw = qs.annotate(utc_h=ExtractHour("hour")).values("utc_h", "mean", "count")
+
+            # Count-weighted mean per NST hour (UTC + 5h; 45-min remainder rounds to +5)
+            by_nst: dict = {}
+            for row in raw:
+                nst_h = (row["utc_h"] + 5) % 24
+                if nst_h not in by_nst:
+                    by_nst[nst_h] = {"wsum": 0.0, "cnt": 0}
+                if row["mean"] is not None and row["count"]:
+                    by_nst[nst_h]["wsum"] += float(row["mean"]) * int(row["count"])
+                    by_nst[nst_h]["cnt"]  += int(row["count"])
+
+            result = []
+            for h in range(24):
+                entry = by_nst.get(h)
+                if entry and entry["cnt"] > 0:
+                    result.append(round(entry["wsum"] / entry["cnt"], 2))
+                else:
+                    result.append(None)
+            return result
 
         hours = list(range(24))
         labels = [f"{h:02d}:00" for h in hours]
@@ -660,12 +1211,14 @@ class ExportReadingsView(APIView):
     Unified CSV/JSON export endpoint with access-level controls.
 
     Query params:
-      sensor     — sensor ID (required)
-      pollutant  — PM25, PM10, CO2, TEMP, RH, TVOC (default: PM25)
+      sensors    — comma-separated sensor IDs, e.g. 1,2,3  (also accepts single 'sensor')
+      pollutants — comma-separated pollutant codes, e.g. PM25,PM10  (empty = all)
+      data_type  — raw (default) | hourly | daily
       start      — ISO 8601 start (optional; ignored for public users)
       end        — ISO 8601 end   (optional)
-      quality    — GOOD, SUSPECT, BAD, UNVALIDATED (default: GOOD)
-      format     — csv (default) or json
+      quality    — GOOD (default) | ALL | SUSPECT | BAD | UNVALIDATED
+      columns    — comma-separated column names to include (empty = all)
+      output     — csv (default) | json
 
     Access levels:
       Unauthenticated / PUBLIC  → max 500 rows, last 7 days only, GOOD quality
@@ -675,94 +1228,279 @@ class ExportReadingsView(APIView):
 
     permission_classes = [AllowAny]
 
+    def perform_content_negotiation(self, request, force=False):
+        # We return a raw Django HttpResponse/StreamingHttpResponse, not a DRF
+        # rendered response.  Bypass DRF's renderer-format filter so that
+        # ?output=csv (or the legacy ?format=csv) doesn't cause Http404.
+        renderers = self.get_renderers()
+        return (renderers[0], renderers[0].media_type)
+
     def get(self, request):
+        import pandas as pd
+        import dateutil.parser as _dp
+
         user = request.user
         max_rows, days_limit = _get_download_limits(user)
 
-        sensor_id = request.query_params.get("sensor")
-        if not sensor_id:
-            return Response({"error": "sensor parameter is required."}, status=400)
+        # Accept ?sensors=1,2,3  OR legacy ?sensor=1
+        sensors_raw = (
+            request.query_params.get("sensors") or request.query_params.get("sensor", "")
+        ).strip()
+        if not sensors_raw:
+            return HttpResponse(
+                "sensor or sensors parameter is required.", status=400, content_type="text/plain"
+            )
 
         try:
-            sensor = Sensor.objects.select_related("site").get(pk=sensor_id)
-        except Sensor.DoesNotExist:
-            return Response({"error": "Sensor not found."}, status=404)
+            sensor_ids = [int(s.strip()) for s in sensors_raw.split(",") if s.strip()]
+        except ValueError:
+            return HttpResponse("Invalid sensor ID.", status=400, content_type="text/plain")
 
-        pollutant = request.query_params.get("pollutant", "PM25").upper()
-        quality = request.query_params.get("quality", "GOOD").upper()
-        fmt = request.query_params.get("format", "csv").lower()
+        sensors_qs = list(Sensor.objects.select_related("site").filter(pk__in=sensor_ids))
+        found_ids = {s.pk for s in sensors_qs}
+        missing = set(sensor_ids) - found_ids
+        if missing:
+            return HttpResponse(
+                f"Sensor(s) not found: {sorted(missing)}", status=404, content_type="text/plain"
+            )
+        sensor_map = {s.pk: s for s in sensors_qs}
 
-        qs = CanonicalReading.objects.filter(
-            sensor=sensor,
-            pollutant=pollutant,
-            is_duplicate=False,
-        ).order_by("original_ts")
+        # Parse parameters
+        pollutant_raw = request.query_params.get("pollutants", request.query_params.get("pollutant", ""))
+        pollutants = [p.strip().upper() for p in pollutant_raw.split(",") if p.strip()] or None
 
-        # Apply quality filter
-        if quality == "ALL":
-            pass
-        else:
-            qs = qs.filter(quality_flag=quality)
+        quality  = request.query_params.get("quality", "GOOD").upper()
+        data_type = request.query_params.get("data_type", "raw").lower()
+        # Support both ?output= (new) and ?format= (legacy, but now safe since we override negotiation)
+        output   = (request.query_params.get("output") or request.query_params.get("format", "csv")).lower()
+        columns_raw = request.query_params.get("columns", "")
+        requested_cols = [c.strip() for c in columns_raw.split(",") if c.strip()]
 
-        # Date range — public users are locked to days_limit window
+        quality_flags: tuple | None = None
+        if quality != "ALL":
+            quality_flags = (quality,)
+
+        # Date bounds
         if days_limit is not None:
-            cutoff = timezone.now() - timedelta(days=days_limit)
-            qs = qs.filter(original_ts__gte=cutoff)
+            start_ts = timezone.now() - timedelta(days=days_limit)
+            end_ts = None
         else:
-            start = request.query_params.get("start")
-            end = request.query_params.get("end")
-            if start:
-                try:
-                    qs = qs.filter(original_ts__gte=start)
-                except (ValueError, TypeError):
-                    return Response({"error": "Invalid start date."}, status=400)
-            if end:
-                try:
-                    qs = qs.filter(original_ts__lte=end)
-                except (ValueError, TypeError):
-                    return Response({"error": "Invalid end date."}, status=400)
+            start_str = request.query_params.get("start")
+            end_str   = request.query_params.get("end")
+            try:
+                start_ts = _dp.parse(start_str).replace(tzinfo=timezone.utc) if start_str else None
+                end_ts   = _dp.parse(end_str).replace(tzinfo=timezone.utc)   if end_str   else None
+            except (ValueError, TypeError):
+                return HttpResponse("Invalid start or end date.", status=400, content_type="text/plain")
 
-        total = qs.count()
-        qs = qs[:max_rows]
+        # ── Build DataFrame by data type ───────────────────────────────────────
+        df = pd.DataFrame()
 
-        if fmt == "json":
-            data = list(qs.values(
-                "original_ts", "pollutant", "unit", "raw_value", "cleaned_value",
-                "quality_flag", "is_indoor",
-            ))
-            return Response({
-                "sensor_id": sensor.pk,
-                "sensor_name": sensor.display_name,
-                "site": sensor.site.name if sensor.site else None,
-                "pollutant": pollutant,
-                "total_available": total,
-                "returned": len(data),
-                "max_rows": max_rows,
-                "readings": data,
-            })
+        if data_type == "hourly":
+            df = self._export_hourly(sensor_ids, sensor_map, pollutants, start_ts, end_ts,
+                                     quality_flags, max_rows)
+            if requested_cols and not df.empty:
+                keep = [c for c in requested_cols if c in df.columns]
+                if keep:
+                    df = df[keep]
+        elif data_type == "daily":
+            df = self._export_daily(sensor_ids, sensor_map, pollutants, start_ts, end_ts, max_rows)
+            if requested_cols and not df.empty:
+                keep = [c for c in requested_cols if c in df.columns]
+                if keep:
+                    df = df[keep]
+        else:
+            # Raw — wide format (one row per timestamp, all pollutants as columns)
+            df = self._export_raw_wide(
+                sensor_ids, sensor_map, pollutants,
+                start_ts, end_ts, quality_flags, max_rows, quality, requested_cols,
+            )
 
-        # CSV response
-        filename = f"nepal_aq_{sensor.serial_number}_{pollutant}.csv"
-        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        # ── Render output ──────────────────────────────────────────────────────
+        sensor_tag = "_".join(str(s) for s in sensor_ids[:3])
+        if len(sensor_ids) > 3:
+            sensor_tag += f"_and{len(sensor_ids)-3}more"
+        filename = f"nepal_aq_{data_type}_{sensor_tag}.csv"
+
+        if output == "json":
+            records = df.to_dict(orient="records") if not df.empty else []
+            for rec in records:
+                for k, v in rec.items():
+                    if hasattr(v, "isoformat"):
+                        rec[k] = v.isoformat()
+            return HttpResponse(
+                __import__("json").dumps({"returned": len(records), "data": records}),
+                content_type="application/json",
+            )
+
+        def _stream_csv(dataframe, fname):
+            buf = io.StringIO()
+            if not dataframe.empty:
+                dataframe.to_csv(buf, index=False)
+            else:
+                buf.write("# No data found for the selected filters.\n")
+            yield buf.getvalue()
+
+        response = StreamingHttpResponse(
+            _stream_csv(df, filename), content_type="text/csv; charset=utf-8"
+        )
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
-
-        writer = csv.writer(response)
-        writer.writerow([
-            "timestamp_utc", "sensor_id", "sensor_name", "site",
-            "is_indoor", "pollutant", "unit", "raw_value", "cleaned_value", "quality_flag",
-        ])
-        for r in qs:
-            writer.writerow([
-                r.original_ts.isoformat(),
-                sensor.pk,
-                sensor.display_name,
-                sensor.site.name if sensor.site else "",
-                r.is_indoor,
-                r.pollutant,
-                r.unit or "",
-                r.raw_value,
-                r.cleaned_value,
-                r.quality_flag,
-            ])
-
         return response
+
+    # ── Private export helpers ─────────────────────────────────────────────────
+
+    def _export_raw_wide(self, sensor_ids, sensor_map, pollutants, start_ts, end_ts,
+                         quality_flags, max_rows, quality, requested_cols):
+        """
+        Return a wide-format DataFrame: one row per (sensor, timestamp),
+        pollutant values spread across columns.  Matches native sensor export format.
+        """
+        import pandas as pd
+        from apps.ingestion.raw_store import raw_store
+
+        # ── Fetch long-format data ─────────────────────────────────────────────
+        df_long = pd.DataFrame()
+        try:
+            df_long = raw_store.query_multi_sensor_export(
+                sensor_ids=sensor_ids, start=start_ts, end=end_ts,
+                pollutants=pollutants, quality_flags=quality_flags, limit=max_rows,
+            )
+        except Exception as exc:
+            logger.warning("ExportReadingsView: DuckDB failed (%s), trying CanonicalReading", exc)
+
+        if df_long.empty:
+            qs = CanonicalReading.objects.filter(
+                sensor_id__in=sensor_ids, is_duplicate=False,
+            ).order_by("original_ts")
+            if pollutants:
+                qs = qs.filter(pollutant__in=pollutants)
+            if quality != "ALL":
+                qs = qs.filter(quality_flag=quality)
+            if start_ts:
+                qs = qs.filter(original_ts__gte=start_ts)
+            if end_ts:
+                qs = qs.filter(original_ts__lte=end_ts)
+            rows = list(qs[:max_rows].values(
+                "sensor_id", "original_ts", "pollutant", "raw_value", "is_indoor",
+            ))
+            if rows:
+                df_long = pd.DataFrame(rows)
+                df_long = df_long.rename(columns={"original_ts": "ts", "raw_value": "value"})
+
+        if df_long.empty:
+            return pd.DataFrame(columns=_WIDE_COLUMN_ORDER)
+
+        # ── Pivot to wide format ───────────────────────────────────────────────
+        df_wide = df_long.pivot_table(
+            index=["sensor_id", "ts"],
+            columns="pollutant",
+            values="value",
+            aggfunc="first",
+        ).reset_index()
+        df_wide.columns.name = None
+
+        # Normalize sensor_id to plain Python int so dict lookups against sensor_map work
+        df_wide["sensor_id"] = df_wide["sensor_id"].astype(object).apply(
+            lambda x: int(x) if x is not None and x == x else None
+        )
+
+        # Rename pollutant codes → display column names
+        df_wide.rename(columns=_WIDE_POLLUTANT_MAP, inplace=True)
+
+        # ── Sensor metadata columns ────────────────────────────────────────────
+        def _sattr(sid, attr, default=""):
+            try:
+                s = sensor_map.get(int(sid))
+            except (TypeError, ValueError):
+                return default
+            return getattr(s, attr, default) if s else default
+
+        def _site_attr(sid, attr):
+            try:
+                s = sensor_map.get(int(sid))
+            except (TypeError, ValueError):
+                return ""
+            return getattr(s.site, attr, "") if s and s.site else ""
+
+        df_wide["Timestamp"]     = df_wide["ts"].dt.strftime("%m/%d/%Y %H:%M:%S")
+        df_wide["Device ID"]     = df_wide["sensor_id"].map(lambda x: _sattr(x, "serial_number"))
+        df_wide["Serial Number"] = df_wide["Device ID"]
+        df_wide["Model"]         = df_wide["sensor_id"].map(lambda x: _sattr(x, "model"))
+        df_wide["Sub Model"]     = ""
+        df_wide["Friendly Name"] = df_wide["sensor_id"].map(lambda x: _sattr(x, "display_name"))
+        df_wide["Latitude"]      = df_wide["sensor_id"].map(lambda x: _site_attr(x, "latitude"))
+        df_wide["Longitude"]     = df_wide["sensor_id"].map(lambda x: _site_attr(x, "longitude"))
+        df_wide["Is Indoor"]     = df_wide["sensor_id"].map(lambda x: _sattr(x, "is_indoor", False))
+        df_wide["Is Public"]      = True
+
+        # ── Computed AQI columns ───────────────────────────────────────────────
+        df_wide["PM2.5 AQI"] = df_wide["PM2.5"].apply(_compute_pm25_aqi) if "PM2.5" in df_wide.columns else None
+        df_wide["PM10 AQI"]  = df_wide["PM10"].apply(_compute_pm10_aqi)  if "PM10"  in df_wide.columns else None
+
+        # ── Fill calibration / status columns (not tracked per-reading) ────────
+        for col in _WIDE_COLUMN_ORDER:
+            if col not in df_wide.columns:
+                df_wide[col] = "<nil>" if col in _OFFSET_COLS else ""
+
+        # Offset columns that had a value set to empty → keep as <nil>
+        for col in _OFFSET_COLS:
+            if col in df_wide.columns:
+                df_wide[col] = df_wide[col].where(df_wide[col] != "", "<nil>")
+
+        # ── Reorder and filter columns ─────────────────────────────────────────
+        if requested_cols:
+            # User selected specific columns from the wizard
+            cols_to_use = [c for c in _WIDE_COLUMN_ORDER if c in requested_cols and c in df_wide.columns]
+            if not cols_to_use:
+                cols_to_use = [c for c in _WIDE_COLUMN_ORDER if c in df_wide.columns]
+        else:
+            cols_to_use = [c for c in _WIDE_COLUMN_ORDER if c in df_wide.columns]
+
+        return df_wide[cols_to_use]
+
+    def _export_hourly(self, sensor_ids, sensor_map, pollutants, start_ts, end_ts, quality_flags, max_rows):
+        import pandas as pd
+        from apps.readings.models import HourlyAggregate
+        qs = HourlyAggregate.objects.filter(sensor_id__in=sensor_ids)
+        if pollutants:
+            qs = qs.filter(pollutant__in=pollutants)
+        if start_ts:
+            qs = qs.filter(hour__gte=start_ts)
+        if end_ts:
+            qs = qs.filter(hour__lte=end_ts)
+        rows = list(qs.order_by("hour", "sensor_id", "pollutant")[:max_rows].values(
+            "sensor_id", "hour", "pollutant", "is_indoor",
+            "count", "mean", "std", "min_value", "max_value", "completeness",
+        ))
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df = df.rename(columns={"hour": "hour_utc"})
+        df["sensor_name"] = df["sensor_id"].map(lambda x: sensor_map[x].display_name if x in sensor_map else "")
+        df["site"]        = df["sensor_id"].map(lambda x: (sensor_map[x].site.name if sensor_map[x].site else "") if x in sensor_map else "")
+        return df[["hour_utc", "sensor_id", "sensor_name", "site", "is_indoor",
+                   "pollutant", "count", "mean", "std", "min_value", "max_value", "completeness"]]
+
+    def _export_daily(self, sensor_ids, sensor_map, pollutants, start_ts, end_ts, max_rows):
+        import pandas as pd
+        from apps.readings.models import DailyAggregate
+        qs = DailyAggregate.objects.filter(sensor_id__in=sensor_ids)
+        if pollutants:
+            qs = qs.filter(pollutant__in=pollutants)
+        if start_ts:
+            qs = qs.filter(date__gte=start_ts.date() if hasattr(start_ts, "date") else start_ts)
+        if end_ts:
+            qs = qs.filter(date__lte=end_ts.date() if hasattr(end_ts, "date") else end_ts)
+        rows = list(qs.order_by("date", "sensor_id", "pollutant")[:max_rows].values(
+            "sensor_id", "date", "pollutant", "is_indoor",
+            "count", "mean", "std", "min_value", "max_value",
+            "p25", "median", "p75", "p95", "completeness",
+        ))
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["sensor_name"] = df["sensor_id"].map(lambda x: sensor_map[x].display_name if x in sensor_map else "")
+        df["site"]        = df["sensor_id"].map(lambda x: (sensor_map[x].site.name if sensor_map[x].site else "") if x in sensor_map else "")
+        return df[["date", "sensor_id", "sensor_name", "site", "is_indoor", "pollutant",
+                   "count", "mean", "std", "min_value", "max_value",
+                   "p25", "median", "p75", "p95", "completeness"]]

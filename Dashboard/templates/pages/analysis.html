@@ -5,10 +5,10 @@
 <style>
   /* Chart canvas heights — 2 sizes, toggleable */
   .chart-wrap, .chart-wrap-tall { position:relative; padding-top:28px; }
-  .chart-wrap canvas        { max-height: 300px; }
-  .chart-wrap-tall canvas   { max-height: 380px; }
-  .chart-wrap.expanded canvas      { max-height: 540px; }
-  .chart-wrap-tall.expanded canvas { max-height: 600px; }
+  .chart-wrap canvas        { max-height: 360px; }
+  .chart-wrap-tall canvas   { max-height: 460px; }
+  .chart-wrap.expanded canvas      { max-height: 620px; }
+  .chart-wrap-tall.expanded canvas { max-height: 700px; }
 
   /* Expand toggle button */
   .chart-expand-btn {
@@ -416,6 +416,11 @@ function sensorMinDate(id) { return (sensorDates[id] || {}).min || null; }
 function sensorMaxDate(id) { return (sensorDates[id] || {}).max || null; }
 function today()           { return new Date().toISOString().slice(0,10); }
 function daysAgo(n)        { const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+function daysBeforeMax(sid, n) {
+  const max = sensorMaxDate(sid);
+  if (!max) return daysAgo(n);
+  const d = new Date(max); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10);
+}
 
 function whoDataset(labels) {
   return { label:'WHO 24h (15 µg/m³)', data:labels.map(()=>WHO_LINE),
@@ -460,7 +465,7 @@ function toggleExpand(wrapId, btn) {
 function rollSensorChanged() {
   const sid  = document.getElementById('roll-sensor').value;
   const maxD = sensorMaxDate(sid) || today();
-  document.getElementById('roll-start').value = daysAgo(7);
+  document.getElementById('roll-start').value = daysBeforeMax(sid, 7);
   document.getElementById('roll-end').value   = maxD;
 }
 
@@ -477,27 +482,47 @@ async function loadRolling() {
   const res  = await fetch(url);
   const data = await res.json();
   const pts  = (data.points || []).map(p => ({ x: p.ts, y: p.value }));
+  const resolution = data.resolution || 'raw';
+  const timeUnit   = data.time_unit  || 'day';
+
+  const yLabel = poll === 'PM25' ? 'PM₂.₅ (µg/m³)' :
+                 poll === 'PM10' ? 'PM₁₀ (µg/m³)' :
+                 poll === 'CO2'  ? 'CO₂ (ppm)'      :
+                 poll === 'TEMP' ? 'Temp (°C)'       :
+                 poll === 'RH'   ? 'RH (%)'           : 'Value';
 
   destroyChart('rolling');
   const sensor = sensors.find(s => String(s.id) === String(sid)) || {};
   charts['rolling'] = new Chart(document.getElementById('rollingChart').getContext('2d'), {
     type: 'line',
     data: { datasets: [
-      { label: sensor.name || 'PM₂.₅', data: pts,
+      { label: sensor.name || poll,
+        data: pts,
         borderColor: sensor.is_indoor ? SENSOR_COLORS.indoor : SENSOR_COLORS.outdoor,
-        borderWidth: 1.5, pointRadius: 0, tension: 0.3, fill: false,
-        parsing: { xAxisKey: 'x', yAxisKey: 'y' } },
+        borderWidth: resolution === 'raw' ? 1.2 : 1.8,
+        pointRadius: resolution === 'daily' ? 3 : 0,
+        tension: 0.3, fill: false,
+        parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+        spanGaps: false,
+      },
       ...( poll === 'PM25' ? [whoDataset(pts.map(p=>p.x)), nepalDataset(pts.map(p=>p.x))] : []),
     ]},
     options: {
       responsive: true, maintainAspectRatio: false,
       scales: {
-        x: { type:'time', time:{unit:'day'}, grid:{color:'#f1f5f9'},
-             title:{display:true, text:'Date'} },
-        y: { beginAtZero:true, grid:{color:'#f1f5f9'},
-             title:{display:true, text: poll === 'PM25' ? 'PM₂.₅ (µg/m³)' :
-               poll === 'CO2' ? 'CO₂ (ppm)' : poll === 'TEMP' ? 'Temp (°C)' :
-               poll === 'RH'  ? 'RH (%)'    : 'Value'} },
+        x: {
+          type: 'time',
+          time: {
+            unit: timeUnit,
+            tooltipFormat: resolution === 'daily' ? 'MMM d, yyyy' : 'MMM d, HH:mm',
+            displayFormats: { hour: 'HH:mm', day: 'MMM d', week: 'MMM d' },
+          },
+          grid: { color:'#f1f5f9' },
+          ticks: { maxTicksLimit: 10 },
+          title: { display: true, text: 'Date' },
+        },
+        y: { beginAtZero: poll !== 'TEMP', grid:{color:'#f1f5f9'},
+             title:{display:true, text: yLabel } },
       },
       plugins: { legend:{position:'bottom'}, tooltip:{mode:'index',intersect:false} }
     }
@@ -739,13 +764,13 @@ async function runScript(pk, btn) {
     const firstId = sensors[0].id;
     const minD = sensorMinDate(firstId), maxD = sensorMaxDate(firstId) || today();
 
-    // Rolling — default to last 7 days
-    document.getElementById('roll-start').value = daysAgo(7);
+    // Rolling — default to last 7 days of available data
+    document.getElementById('roll-start').value = daysBeforeMax(firstId, 7);
     document.getElementById('roll-end').value   = maxD;
     await loadRolling();
 
-    // Diurnal single — default to last 7 days
-    document.getElementById('diu-start').value  = daysAgo(7);
+    // Diurnal single — default to last 7 days of available data
+    document.getElementById('diu-start').value  = daysBeforeMax(firstId, 7);
     document.getElementById('diu-end').value    = maxD;
     await loadDiurnal();
 
@@ -755,8 +780,10 @@ async function runScript(pk, btn) {
 
   // I/O site charts (paired sites)
   {% if paired_sites %}
-  const ioStartDefault = daysAgo(7);
-  const ioEndDefault   = today();
+  const ioFirstId    = sensors.length > 0 ? sensors[0].id : null;
+  const ioMaxDate    = ioFirstId ? (sensorMaxDate(ioFirstId) || today()) : today();
+  const ioStartDefault = ioFirstId ? daysBeforeMax(ioFirstId, 7) : daysAgo(7);
+  const ioEndDefault   = ioMaxDate;
   if (document.getElementById('io-start'))    document.getElementById('io-start').value    = ioStartDefault;
   if (document.getElementById('io-end'))      document.getElementById('io-end').value      = ioEndDefault;
   if (document.getElementById('ratio-start')) document.getElementById('ratio-start').value = ioStartDefault;

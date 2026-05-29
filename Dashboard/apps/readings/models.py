@@ -82,6 +82,11 @@ class CanonicalReading(TimeStampedModel):
         PM4 = "PM4", "PM4 (µg/m³)"
         PM10 = "PM10", "PM10 (µg/m³)"
         CO2 = "CO2", "CO₂ (ppm)"
+        CO = "CO", "CO (ppm)"
+        SO2 = "SO2", "SO₂ (µg/m³)"
+        O3 = "O3", "O₃ (µg/m³)"
+        NO2 = "NO2", "NO₂ (µg/m³)"
+        CH2O = "CH2O", "CH₂O / Formaldehyde (µg/m³)"
         TVOC = "TVOC", "Total VOC (mg/m³)"
         TEMP = "TEMP", "Temperature (°C)"
         RH = "RH", "Relative Humidity (%)"
@@ -89,6 +94,8 @@ class CanonicalReading(TimeStampedModel):
         NC05 = "NC05", "NC 0.5 (#/cm³)"
         NC1 = "NC1", "NC 1.0 (#/cm³)"
         NC25 = "NC25", "NC 2.5 (#/cm³)"
+        NC4 = "NC4", "NC 4.0 (#/cm³)"
+        NC10 = "NC10", "NC 10.0 (#/cm³)"
 
     class QualityFlag(models.TextChoices):
         GOOD = "GOOD", "Good"
@@ -266,3 +273,36 @@ class IngestionLog(TimeStampedModel):
 
     def __str__(self):
         return f"{self.source_name} @ {self.created_at:%Y-%m-%d %H:%M} — {self.get_status_display()}"
+
+
+class HourlyAggregate(TimeStampedModel):
+    """
+    Pre-computed hourly statistics per sensor/pollutant.
+
+    `hour` is always truncated to the start of the hour in UTC.
+    Populated by the aggregation task. Never use as source of truth —
+    always regenerate from CanonicalReading.
+    """
+
+    sensor = models.ForeignKey(Sensor, on_delete=models.CASCADE, related_name="hourly_aggregates")
+    site = models.ForeignKey(Site, on_delete=models.CASCADE, related_name="hourly_aggregates")
+    hour = models.DateTimeField(db_index=True, help_text="Hour start (UTC, tz-aware).")
+    pollutant = models.CharField(max_length=10, choices=CanonicalReading.Pollutant.choices)
+    is_indoor = models.BooleanField(default=False)
+
+    count = models.PositiveIntegerField(default=0)
+    mean = models.FloatField(null=True, blank=True)
+    std = models.FloatField(null=True, blank=True)
+    min_value = models.FloatField(null=True, blank=True)
+    max_value = models.FloatField(null=True, blank=True)
+    completeness = models.FloatField(null=True, blank=True, help_text="Fraction of expected readings received (0–1).")
+
+    class Meta:
+        ordering = ["-hour"]
+        unique_together = [["sensor", "hour", "pollutant"]]
+        indexes = [
+            models.Index(fields=["sensor", "pollutant", "hour"]),
+        ]
+
+    def __str__(self):
+        return f"{self.hour:%Y-%m-%d %H:00} | {self.sensor} | {self.pollutant} | mean={self.mean}"

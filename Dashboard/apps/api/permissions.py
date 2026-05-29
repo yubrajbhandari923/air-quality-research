@@ -39,9 +39,12 @@ class HasResearcherPermission(BasePermission):
 
 
 class IsMaintainerOrAdmin(BasePermission):
-    """Allow if user has maintainer or admin role."""
+    """Allow if user has maintainer/admin role or an ADMIN API key."""
 
     def has_permission(self, request, view):
+        auth = request.auth
+        if isinstance(auth, APIKey) and auth.role == APIKey.Role.ADMIN:
+            return True
         return (
             request.user.is_authenticated
             and getattr(request.user, "is_maintainer_or_above", False)

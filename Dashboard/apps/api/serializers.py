@@ -95,6 +95,40 @@ class DatasetSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "source_type", "record_count", "created_at"]
 
 
+class BatchMeasurementSerializer(serializers.Serializer):
+    """One pollutant reading within a single timestamped snapshot."""
+    pollutant = serializers.CharField(max_length=10)
+    value = serializers.FloatField(allow_null=True)
+    unit = serializers.CharField(max_length=20, default="")
+
+    def validate_pollutant(self, value):
+        valid = {c[0] for c in CanonicalReading.Pollutant.choices}
+        if value.upper() not in valid:
+            raise serializers.ValidationError(
+                f"Unknown pollutant '{value}'. Valid values: {sorted(valid)}"
+            )
+        return value.upper()
+
+
+class BatchSnapshotSerializer(serializers.Serializer):
+    """One timestamped set of measurements from a sensor."""
+    timestamp = serializers.DateTimeField()
+    measurements = BatchMeasurementSerializer(many=True, min_length=1)
+
+
+class BatchReadingSubmitSerializer(serializers.Serializer):
+    """
+    Submit multiple timestamped snapshots in a single request.
+
+    Use this for offline sensors catching up after a power/connectivity outage,
+    or for scrapers pushing historical data.
+
+    serial_number is optional when the API key is bound to a specific sensor.
+    """
+    serial_number = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    readings = BatchSnapshotSerializer(many=True, min_length=1, max_length=10000)
+
+
 # ── Chart data serializers ────────────────────────────────────────────────────
 
 class TimeSeriesPointSerializer(serializers.Serializer):

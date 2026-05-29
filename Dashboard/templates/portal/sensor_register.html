@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}Register Sensor — Portal{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 sm:px-6 py-12">
+
+  <div class="mb-8">
+    <a href="{% url 'portal:sensor_list' %}" class="text-sm text-slate-500 hover:text-slate-700">← Back to sensors</a>
+    <h1 class="mt-2 text-2xl font-bold text-slate-900">Register a Sensor</h1>
+    <p class="mt-1 text-sm text-slate-500">Sensors must be registered before uploading CSV data or sending readings via the API.</p>
+  </div>
+
+  {% if errors %}
+  <div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+    <strong>Please fix these errors:</strong>
+    <ul class="mt-1 list-disc list-inside space-y-0.5">
+      {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <form method="post" class="space-y-8">
+    {% csrf_token %}
+
+    {# ── Sensor details ───────────────────────────────────────────── #}
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <h2 class="text-base font-semibold text-slate-800 mb-4">Sensor details</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        <div class="sm:col-span-2">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Serial number <span class="text-red-500">*</span></label>
+          <input type="text" name="serial_number" value="{{ form_data.serial_number }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. 81432434001" required>
+          <p class="mt-1 text-xs text-slate-400">Must match the value in your CSV's "Serial Number" column exactly.</p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Friendly name</label>
+          <input type="text" name="friendly_name" value="{{ form_data.friendly_name }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. Belauri Outdoor">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Model</label>
+          <input type="text" name="model" value="{{ form_data.model }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. 8143, 8144">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Manufacturer</label>
+          <input type="text" name="manufacturer" value="{{ form_data.manufacturer|default:'Particles Plus' }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Placement</label>
+          <select name="is_indoor" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+            <option value="0" {% if form_data.is_indoor != "1" %}selected{% endif %}>Outdoor</option>
+            <option value="1" {% if form_data.is_indoor == "1" %}selected{% endif %}>Indoor</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Power source</label>
+          <select name="power_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+            {% for val, label in power_choices %}
+            <option value="{{ val }}" {% if form_data.power_type == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Connectivity</label>
+          <select name="connectivity_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+            {% for val, label in connectivity_choices %}
+            <option value="{{ val }}" {% if form_data.connectivity_type == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Installation date</label>
+          <input type="date" name="installed_at" value="{{ form_data.installed_at }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+        </div>
+
+        <div class="sm:col-span-2">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Installation notes</label>
+          <textarea name="installation_notes" rows="2"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                    placeholder="Height, orientation, nearby obstructions, etc.">{{ form_data.installation_notes }}</textarea>
+        </div>
+
+      </div>
+    </div>
+
+    {# ── Site ─────────────────────────────────────────────────────── #}
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+      <h2 class="text-base font-semibold text-slate-800 mb-1">Deployment site</h2>
+      <p class="text-xs text-slate-400 mb-4">Select an existing site or fill in the fields below to create a new one.</p>
+
+      {% if sites %}
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 mb-1">Existing site (optional)</label>
+        <select name="site_id" id="existing-site"
+                class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+          <option value="">— Create a new site —</option>
+          {% for site in sites %}
+          <option value="{{ site.pk }}" {% if form_data.site_id == site.pk|stringformat:"s" %}selected{% endif %}>
+            {{ site.name }} ({{ site.district }}) — {{ site.latitude|floatformat:4 }}, {{ site.longitude|floatformat:4 }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <p class="text-xs text-slate-400 mb-4">— or fill in the fields below to create a new site —</p>
+      {% endif %}
+
+      <div id="new-site-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Site name <span class="text-red-500 new-site-required">*</span></label>
+          <input type="text" name="site_name" value="{{ form_data.site_name }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. Belauri">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">District <span class="text-red-500 new-site-required">*</span></label>
+          <input type="text" name="district" value="{{ form_data.district }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. Kanchanpur">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Municipality</label>
+          <input type="text" name="municipality" value="{{ form_data.municipality }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Province</label>
+          <input type="text" name="province" value="{{ form_data.province }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Latitude (°N) <span class="text-red-500 new-site-required">*</span></label>
+          <input type="number" step="any" name="latitude" value="{{ form_data.latitude }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. 28.6844">
+          <p class="mt-1 text-xs text-slate-400">Decimal degrees, WGS84. Positive = North.</p>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Longitude (°E) <span class="text-red-500 new-site-required">*</span></label>
+          <input type="number" step="any" name="longitude" value="{{ form_data.longitude }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                 placeholder="e.g. 80.3646">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Elevation (m above sea level)</label>
+          <input type="number" step="any" name="elevation_m" value="{{ form_data.elevation_m }}"
+                 class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Land use</label>
+          <select name="land_use_type" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue">
+            {% for val, label in land_use_choices %}
+            <option value="{{ val }}" {% if form_data.land_use_type == val %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="sm:col-span-2">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Site description</label>
+          <textarea name="site_description" rows="2"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-nao-blue"
+                    placeholder="Brief description of the deployment environment.">{{ form_data.site_description }}</textarea>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+              class="px-5 py-2.5 rounded-lg bg-nao-blue text-white text-sm font-semibold hover:bg-blue-700 transition-colors">
+        Register sensor
+      </button>
+      <a href="{% url 'portal:sensor_list' %}" class="text-sm text-slate-500 hover:text-slate-700">Cancel</a>
+    </div>
+
+  </form>
+
+</div>
+
+<script>
+  // Hide new-site required markers when an existing site is selected
+  const siteSelect = document.getElementById("existing-site");
+  const newSiteFields = document.getElementById("new-site-fields");
+  if (siteSelect) {
+    function toggleNewSite() {
+      const creating = siteSelect.value === "";
+      newSiteFields.style.opacity = creating ? "1" : "0.4";
+    }
+    siteSelect.addEventListener("change", toggleNewSite);
+    toggleNewSite();
+  }
+</script>
+{% endblock %}

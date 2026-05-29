@@ -223,3 +223,4 @@ Abhishek/
 *.zip
 .DS_Store
 *.sqlite3
+*.duckdb

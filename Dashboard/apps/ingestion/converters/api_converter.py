@@ -154,7 +154,38 @@ class APIConverter(BaseDataConverter):
             rec["site_id"] = sensor.site_id
             rec["is_indoor"] = sensor.is_indoor
 
-        result = self.save_to_canonical_schema(records)
+        # Write to DuckDB raw store (analytical store for historical queries)
+        from apps.ingestion.raw_store import raw_store
+        try:
+            saved, duplicates = raw_store.append_batch(records)
+            result = {"saved": saved, "duplicates": duplicates, "errors": 0}
+        except Exception as exc:
+            logger.error("APIConverter: raw_store write failed: %s", exc)
+            result = {"saved": 0, "duplicates": 0, "errors": len(records)}
+
+        # Also write to CanonicalReading for live 1-day chart queries (fast index scan).
+        # Rows older than 2 days are purged during aggregation runs, keeping this table small.
+        try:
+            from apps.readings.models import CanonicalReading
+            to_create = []
+            for rec in records:
+                to_create.append(CanonicalReading(
+                    sensor_id=rec["sensor_id"],
+                    site_id=rec.get("site_id"),
+                    original_ts=rec["original_ts"],
+                    pollutant=rec["pollutant"],
+                    unit=rec.get("unit", ""),
+                    raw_value=rec.get("raw_value"),
+                    quality_flag=rec.get("quality_flag", "UNVALIDATED"),
+                    flag_reason=rec.get("flag_reason", ""),
+                    is_indoor=rec.get("is_indoor", False),
+                    source_type=rec.get("source_type", "LIVE_API"),
+                    is_duplicate=False,
+                ))
+            CanonicalReading.objects.bulk_create(to_create, ignore_conflicts=True)
+        except Exception as exc:
+            logger.warning("APIConverter: CanonicalReading mirror write failed: %s", exc)
+
         result["status"] = "SUCCESS" if result["errors"] == 0 else "PARTIAL"
 
         IngestionLog.objects.create(

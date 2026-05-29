@@ -39,121 +39,154 @@
     {% endif %}
   </div>
 
-  {# ── Download builder ────────────────────────────────────────────────── #}
+  {# ── Download Wizard ─────────────────────────────────────────────────── #}
   <section id="download" class="mt-10 scroll-mt-20">
     <h2 class="text-lg font-semibold text-slate-800 mb-1">Download Data</h2>
     <p class="text-sm text-slate-600 mb-5">
-      Select sensor, pollutant, and date range, then generate a CSV file.
+      Choose sensors, date range, and data type to generate a CSV.
+      {% if dl_tier == 'public' %}Public access: last {{ dl_cfg.public_days_limit }} days, up to {{ dl_cfg.max_rows_public }} rows.{% endif %}
     </p>
 
-    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
 
-        {# Sensor #}
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1.5">Sensor</label>
-          <select id="dl-sensor" class="form-select w-full">
-            <option value="">— Select sensor —</option>
+      {# Step 1 — Sensors #}
+      <div>
+        <label class="block text-sm font-semibold text-slate-700 mb-2">
+          1 · Sensors
+          <span class="font-normal text-slate-400 ml-1">select one or more</span>
+        </label>
+        <div class="relative">
+          <input type="text" id="sensor-search" placeholder="Search sensors…"
+                 class="form-input w-full mb-2 text-sm"
+                 oninput="filterSensors(this.value)">
+          <div id="sensor-list" class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-60 overflow-y-auto p-1">
             {% for s in sensors %}
-            <option value="{{ s.pk }}"
-                    data-site="{{ s.site.name|default:'' }}"
-                    data-indoor="{{ s.is_indoor|yesno:'true,false' }}">
-              {{ s.friendly_name }}
-              {% if s.site %}· {{ s.site.name }}{% endif %}
-              {% if s.is_indoor %}(Indoor){% else %}(Outdoor){% endif %}
-            </option>
+            <label class="sensor-item flex items-center gap-2 p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer text-sm"
+                   data-name="{{ s.friendly_name|lower }} {{ s.site.name|lower|default:'' }} {{ s.serial_number|lower }}">
+              <input type="checkbox" class="sensor-cb accent-nao-blue" value="{{ s.pk }}" onchange="updateUrl()">
+              <div class="min-w-0">
+                <div class="font-medium text-slate-700 truncate">{{ s.friendly_name }}</div>
+                <div class="text-xs text-slate-400">
+                  {{ s.site.name|default:"—" }} ·
+                  {% if s.is_indoor %}<span class="text-red-500">Indoor</span>{% else %}<span class="text-green-600">Outdoor</span>{% endif %}
+                </div>
+              </div>
+            </label>
             {% endfor %}
-          </select>
+          </div>
+        </div>
+        <div class="mt-1 flex gap-2">
+          <button onclick="selectAllSensors(true)"  class="text-xs text-nao-blue hover:underline">Select all</button>
+          <span class="text-slate-300">·</span>
+          <button onclick="selectAllSensors(false)" class="text-xs text-slate-500 hover:underline">Clear</button>
+        </div>
+      </div>
+
+      {# Step 2 — Data type + Pollutants #}
+      <div class="grid sm:grid-cols-2 gap-5">
+        <div>
+          <label class="block text-sm font-semibold text-slate-700 mb-2">2 · Data type</label>
+          <div class="flex rounded-lg border border-slate-200 overflow-hidden text-sm" id="data-type-group">
+            <button class="data-type-btn flex-1 py-2 bg-nao-blue text-white font-medium" data-type="raw"    onclick="setDataType('raw')">Raw minute</button>
+            <button class="data-type-btn flex-1 py-2 text-slate-600 hover:bg-slate-50"  data-type="hourly" onclick="setDataType('hourly')">Hourly</button>
+            <button class="data-type-btn flex-1 py-2 text-slate-600 hover:bg-slate-50"  data-type="daily"  onclick="setDataType('daily')">Daily</button>
+          </div>
+          <p id="data-type-note" class="text-xs text-slate-400 mt-1">
+            Minute-by-minute readings from the sensor. Large date ranges may take a moment.
+          </p>
         </div>
 
-        {# Pollutant #}
         <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1.5">Pollutant</label>
-          <select id="dl-pollutant" class="form-select w-full">
-            <option value="PM25">PM₂.₅ (µg/m³)</option>
-            <option value="PM10">PM₁₀ (µg/m³)</option>
-            <option value="PM1">PM₁ (µg/m³)</option>
-            <option value="CO2">CO₂ (ppm)</option>
-            <option value="TVOC">tVOC</option>
-            <option value="TEMP">Temperature (°C)</option>
-            <option value="RH">Relative Humidity (%)</option>
-          </select>
+          <label class="block text-sm font-semibold text-slate-700 mb-2">Pollutants <span class="font-normal text-slate-400">(empty = all)</span></label>
+          <div class="grid grid-cols-2 gap-1 text-sm">
+            {% for code, label in pollutants_choices %}
+            <label class="flex items-center gap-1.5 p-1.5 rounded hover:bg-slate-50 cursor-pointer">
+              <input type="checkbox" class="pollutant-cb accent-nao-blue" value="{{ code }}" onchange="updateUrl()">
+              <span class="text-slate-700">{{ label }}</span>
+            </label>
+            {% endfor %}
+          </div>
         </div>
+      </div>
 
-        {# Quality #}
+      {# Step 3 — Date range + Quality #}
+      <div class="grid sm:grid-cols-3 gap-4">
         <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1.5">Quality Flag</label>
-          <select id="dl-quality" class="form-select w-full">
-            <option value="GOOD">GOOD (validated)</option>
-            <option value="UNVALIDATED">UNVALIDATED</option>
-            <option value="ALL">All flags</option>
-          </select>
-        </div>
-
-        {# Date from — disabled for public #}
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1.5">
-            From
-            {% if dl_tier == 'public' %}
-            <span class="text-xs text-amber-600 font-normal">(locked — last {{ dl_cfg.public_days_limit }}d)</span>
-            {% endif %}
+          <label class="block text-sm font-semibold text-slate-700 mb-1.5">
+            3 · From
+            {% if dl_tier == 'public' %}<span class="text-xs text-amber-600 font-normal">(last {{ dl_cfg.public_days_limit }}d)</span>{% endif %}
           </label>
           <input type="date" id="dl-start"
-                 class="form-input {% if dl_tier == 'public' %}opacity-50 cursor-not-allowed{% endif %}"
-                 {% if dl_tier == 'public' %}disabled{% endif %} />
+                 class="form-input w-full {% if dl_tier == 'public' %}opacity-50 cursor-not-allowed{% endif %}"
+                 {% if dl_tier == 'public' %}disabled{% endif %}
+                 onchange="updateUrl()">
         </div>
-
-        {# Date to #}
         <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1.5">To</label>
+          <label class="block text-sm font-semibold text-slate-700 mb-1.5">To</label>
           <input type="date" id="dl-end"
-                 class="form-input {% if dl_tier == 'public' %}opacity-50 cursor-not-allowed{% endif %}"
-                 {% if dl_tier == 'public' %}disabled{% endif %} />
+                 class="form-input w-full {% if dl_tier == 'public' %}opacity-50 cursor-not-allowed{% endif %}"
+                 {% if dl_tier == 'public' %}disabled{% endif %}
+                 onchange="updateUrl()">
         </div>
-
-        {# Format #}
         <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1.5">Format</label>
-          <select id="dl-format" class="form-select w-full">
-            <option value="csv">CSV (spreadsheet-ready)</option>
-            <option value="json">JSON</option>
+          <label class="block text-sm font-semibold text-slate-700 mb-1.5">Quality</label>
+          <select id="dl-quality" class="form-select w-full" onchange="updateUrl()">
+            <option value="GOOD">GOOD (validated only)</option>
+            <option value="UNVALIDATED">UNVALIDATED</option>
+            <option value="ALL">All flags incl. suspect/bad</option>
           </select>
         </div>
       </div>
 
-      {# Row limit info #}
-      <p class="mt-4 text-xs text-slate-500">
-        {% if dl_tier == 'admin' %}
-          Up to 500,000 rows per download.
-        {% elif dl_tier == 'researcher' %}
-          Up to 50,000 rows per download.
-        {% else %}
-          Up to {{ dl_cfg.max_rows_public }} rows · Last {{ dl_cfg.public_days_limit }} days only.
-        {% endif %}
-        Results are generated on demand — large ranges may take a moment.
-      </p>
+      {# Column selector #}
+      <div id="column-section">
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm font-semibold text-slate-700">
+            Columns <span class="font-normal text-slate-400">(empty = all columns)</span>
+          </label>
+          <div class="flex gap-3 text-xs text-slate-500">
+            <button type="button" onclick="selectAllCols(true)"  class="hover:text-nao-blue underline">Select all</button>
+            <button type="button" onclick="selectAllCols(false)" class="hover:text-nao-blue underline">Clear</button>
+          </div>
+        </div>
+        <div id="column-list"
+             class="flex flex-wrap gap-1.5 text-xs max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
+        </div>
+      </div>
 
-      <div class="mt-5 flex items-center gap-3">
-        <button onclick="downloadData()"
-                class="btn-primary text-sm">
-          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-          Generate &amp; Download
-        </button>
-        <span id="dl-status" class="text-sm text-slate-500"></span>
+      {# Preview URL + download button #}
+      <div class="border-t border-slate-100 pt-4">
+        <div class="bg-slate-50 rounded-lg p-3 mb-4 font-mono text-xs text-slate-600 break-all" id="url-preview">
+          Select sensors to generate download URL…
+        </div>
+        <div class="flex items-center gap-3 flex-wrap">
+          <a id="dl-link" href="#" onclick="return triggerDownload()"
+             class="inline-flex items-center gap-2 bg-nao-blue hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Download CSV
+          </a>
+          <a id="dl-json-link" href="#" onclick="return triggerDownload('json')"
+             class="inline-flex items-center gap-2 border border-slate-300 text-slate-600 text-sm font-medium px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors">
+            Download JSON
+          </a>
+          <span id="dl-status" class="text-sm text-slate-500"></span>
+        </div>
+        <p class="text-xs text-slate-400 mt-2">
+          {% if dl_tier == 'admin' %}Up to 500,000 rows.
+          {% elif dl_tier == 'researcher' %}Up to 50,000 rows.
+          {% else %}Up to {{ dl_cfg.max_rows_public }} rows · last {{ dl_cfg.public_days_limit }} days.{% endif %}
+          Large downloads may take a few seconds to generate.
+        </p>
       </div>
     </div>
   </section>
 
-  {# ── Sample downloads (public) ─────────────────────────────────────────── #}
+  {# ── Quick per-sensor links ───────────────────────────────────────────── #}
   {% if sensors %}
   <section id="sample" class="mt-10 scroll-mt-20">
-    <h2 class="text-lg font-semibold text-slate-800 mb-1">Quick Sample Downloads</h2>
-    <p class="text-sm text-slate-600 mb-4">
-      Pre-built links to the last {{ dl_cfg.public_days_limit }} days of PM₂.₅ data for each sensor.
-      No sign-in required.
-    </p>
+    <h2 class="text-lg font-semibold text-slate-800 mb-3">Quick Downloads per Sensor</h2>
     <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
       <table class="w-full text-sm">
         <thead class="bg-slate-50 border-b border-slate-200">
@@ -161,15 +194,15 @@
             <th class="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Sensor</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Location</th>
             <th class="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Type</th>
-            <th class="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Action</th>
+            <th class="text-left px-4 py-3 text-xs font-semibold text-slate-600 uppercase tracking-wider">Downloads</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-100">
           {% for s in sensors %}
           <tr class="hover:bg-slate-50 transition-colors">
             <td class="px-4 py-3">
-              <div class="font-medium text-slate-800">{{ s.friendly_name }}</div>
-              <div class="text-xs text-slate-500 font-mono">{{ s.serial_number }}</div>
+              <a href="{% url 'observatory:sensor_detail' s.pk %}" class="font-medium text-slate-800 hover:text-nao-blue">{{ s.friendly_name }}</a>
+              <div class="text-xs text-slate-400 font-mono">{{ s.serial_number }}</div>
             </td>
             <td class="px-4 py-3 text-slate-600">{{ s.site.name|default:"—" }}</td>
             <td class="px-4 py-3">
@@ -178,13 +211,24 @@
               </span>
             </td>
             <td class="px-4 py-3">
-              <a href="/api/v1/export/?sensor={{ s.pk }}&pollutant=PM25&quality=GOOD&format=csv"
-                 class="inline-flex items-center gap-1.5 text-xs font-medium text-nao-blue hover:text-blue-800 bg-blue-50 hover:bg-blue-100 rounded-lg px-3 py-1.5 transition-colors">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                PM₂.₅ CSV
-              </a>
+              <div class="flex flex-wrap gap-2">
+                <a href="/api/v1/export/?sensors={{ s.pk }}&quality=GOOD&data_type=raw"
+                   class="text-xs font-medium text-nao-blue bg-blue-50 hover:bg-blue-100 rounded px-2 py-1 transition-colors">
+                  Raw CSV
+                </a>
+                <a href="/api/v1/export/?sensors={{ s.pk }}&quality=GOOD&data_type=hourly"
+                   class="text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 transition-colors">
+                  Hourly CSV
+                </a>
+                <a href="/api/v1/export/?sensors={{ s.pk }}&quality=GOOD&data_type=daily"
+                   class="text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 transition-colors">
+                  Daily CSV
+                </a>
+                <a href="{% url 'observatory:data_access' %}?sensors={{ s.pk }}"
+                   class="text-xs font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded px-2 py-1 transition-colors">
+                  Customize →
+                </a>
+              </div>
             </td>
           </tr>
           {% empty %}
@@ -302,47 +346,186 @@
 {% endblock %}
 
 {% block extra_js %}
+<style>
+.data-type-btn { border-right: 1px solid #e2e8f0; transition: background .15s, color .15s; }
+.data-type-btn:last-child { border-right: none; }
+.data-type-btn.active { background: #2563eb; color: #fff; }
+</style>
 <script>
-function downloadData() {
-  const sensor = document.getElementById('dl-sensor').value;
-  const pollutant = document.getElementById('dl-pollutant').value;
+const DL_TIER = '{{ dl_tier }}';
+const SENSORS_JSON = {{ sensors_json|safe }};
+
+const COLUMNS = {
+  raw: [
+    'Timestamp','Device ID','Serial Number','Model','Sub Model','Friendly Name',
+    'Latitude','Longitude','Is Indoor','Is Public',
+    'PM2.5 AQI','PM10 AQI',
+    'PM1.0','PM2.5',
+    'Applied PM2.5 Custom Calibration Setting - Multiplication Factor',
+    'Applied PM2.5 Custom Calibration Setting - Offset',
+    'PM4.0','PM10',
+    'Applied PM10 Custom Calibration Setting - Multiplication Factor',
+    'Applied PM10 Custom Calibration Setting - Offset',
+    'PM0.5 NC','PM1.0 NC','PM2.5 NC','PM4.0 NC','PM10 NC',
+    'Typical Particle Size','PM Sensor Status',
+    'CO2',
+    'Applied CO2 Custom Calibration Setting - Multiplication Factor',
+    'Applied CO2 Custom Calibration Setting - Offset','CO2 Sensor Status',
+    'CH2O',
+    'Applied CH2O Custom Calibration Setting - Multiplication Factor',
+    'Applied CH2O Custom Calibration Setting - Offset','CH2O Sensor Status',
+    'Barometric Pressure',
+    'Applied Barometric Pressure Custom Calibration Setting - Offset','Barometric Sensor Status',
+    'CO',
+    'Applied CO Custom Calibration Setting - Multiplication Factor',
+    'Applied CO Custom Calibration Setting - Offset','CO Sensor Status',
+    'SO2',
+    'Applied SO2 Custom Calibration Setting - Multiplication Factor',
+    'Applied SO2 Custom Calibration Setting - Offset','SO2 Sensor Status',
+    'O3',
+    'Applied O3 Custom Calibration Setting - Multiplication Factor',
+    'Applied O3 Custom Calibration Setting - Offset','O3 Sensor Status',
+    'NO2',
+    'Applied NO2 Custom Calibration Setting - Multiplication Factor',
+    'Applied NO2 Custom Calibration Setting - Offset','NO2 Sensor Status',
+    'VOC tVOC measurement',
+    'Applied TVOC Custom Calibration Setting - Multiplication Factor',
+    'Applied TVOC Custom Calibration Setting - Offset','VOC Sensor Status',
+    'Temperature','Applied Temperature Custom Calibration Setting - Offset',
+    'Relative Humidity','Applied Relative Humidity Custom Calibration Setting - Offset',
+    'Temperature/Humidity Sensor Status','System Status',
+  ],
+  hourly: ['sensor_id','sensor_name','site','hour_utc','pollutant','is_indoor','count','mean','std','min_value','max_value','completeness'],
+  daily:  ['sensor_id','sensor_name','site','date','pollutant','is_indoor','count','mean','std','min_value','max_value','p25','median','p75','p95','completeness'],
+};
+const DATA_TYPE_NOTES = {
+  raw:    'Minute-by-minute readings from the sensor. Large date ranges may take a moment.',
+  hourly: 'Hourly mean, min, max, std, and completeness. Pre-computed aggregates.',
+  daily:  'Daily mean, percentiles (p25/median/p75/p95), and completeness. Pre-computed aggregates.',
+};
+
+let currentDataType = 'raw';
+let checkedCols = new Set();
+
+function setDataType(t) {
+  currentDataType = t;
+  document.querySelectorAll('.data-type-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.type === t);
+    b.style.background = b.dataset.type === t ? '#2563eb' : '';
+    b.style.color = b.dataset.type === t ? '#fff' : '';
+  });
+  document.getElementById('data-type-note').textContent = DATA_TYPE_NOTES[t];
+  renderColumnList();
+  updateUrl();
+}
+
+function renderColumnList() {
+  const cols = COLUMNS[currentDataType] || [];
+  const el = document.getElementById('column-list');
+  el.innerHTML = cols.map(c => `
+    <label class="flex items-center gap-1.5 px-2 py-1 rounded border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 text-xs">
+      <input type="checkbox" class="col-cb accent-nao-blue" value="${c}"
+             ${checkedCols.has(c) ? 'checked' : ''}
+             onchange="toggleCol('${c}', this.checked)">
+      <span class="font-mono text-slate-700">${c}</span>
+    </label>
+  `).join('');
+}
+
+function toggleCol(c, checked) {
+  if (checked) checkedCols.add(c); else checkedCols.delete(c);
+  updateUrl();
+}
+
+function getSelectedSensors() {
+  return [...document.querySelectorAll('.sensor-cb:checked')].map(c => c.value);
+}
+function getSelectedPollutants() {
+  return [...document.querySelectorAll('.pollutant-cb:checked')].map(c => c.value);
+}
+
+function buildUrl(outputFmt) {
+  const sensors = getSelectedSensors();
+  if (!sensors.length) return null;
+  const pollutants = getSelectedPollutants();
   const quality = document.getElementById('dl-quality').value;
-  const start = document.getElementById('dl-start').value;
-  const end = document.getElementById('dl-end').value;
-  const fmt = document.getElementById('dl-format').value;
-  const status = document.getElementById('dl-status');
+  const start = document.getElementById('dl-start')?.value;
+  const end   = document.getElementById('dl-end')?.value;
+  const cols  = [...checkedCols];
 
-  if (!sensor) {
-    status.textContent = 'Please select a sensor.';
-    status.className = 'text-sm text-red-600';
-    return;
-  }
+  let url = `/api/v1/export/?sensors=${sensors.join(',')}&data_type=${currentDataType}&quality=${quality}`;
+  if (pollutants.length) url += `&pollutants=${pollutants.join(',')}`;
+  if (start) url += `&start=${start}T00:00:00Z`;
+  if (end)   url += `&end=${end}T23:59:59Z`;
+  if (cols.length) url += `&columns=${cols.join(',')}`;
+  if (outputFmt) url += `&output=${outputFmt}`;
+  return url;
+}
 
-  let url = `/api/v1/export/?sensor=${sensor}&pollutant=${pollutant}&quality=${quality}&format=${fmt}`;
-  if (start) url += `&start=${start}T00:00:00`;
-  if (end)   url += `&end=${end}T23:59:59`;
-
-  status.textContent = 'Generating file…';
-  status.className = 'text-sm text-slate-500';
-
-  if (fmt === 'csv') {
-    // Trigger browser download
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = '';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => { status.textContent = 'Download started.'; status.className = 'text-sm text-green-600'; }, 500);
+function updateUrl() {
+  const url = buildUrl('csv');
+  const preview = document.getElementById('url-preview');
+  if (url) {
+    preview.textContent = window.location.origin + url;
+    preview.classList.remove('text-slate-400');
   } else {
-    // Open JSON in new tab
-    window.open(url, '_blank');
-    status.textContent = '';
+    preview.textContent = 'Select sensors to generate download URL…';
+    preview.classList.add('text-slate-400');
   }
 }
 
-// Default end date to today
-const today = new Date().toISOString().slice(0, 10);
-document.getElementById('dl-end').value = today;
+function triggerDownload(fmt) {
+  const sensors = getSelectedSensors();
+  if (!sensors.length) {
+    document.getElementById('dl-status').textContent = 'Select at least one sensor.';
+    return false;
+  }
+  const url = buildUrl(fmt || 'csv');
+  document.getElementById('dl-status').textContent = 'Preparing download…';
+  setTimeout(() => { document.getElementById('dl-status').textContent = ''; }, 3000);
+  window.location.href = url;
+  return false;
+}
+
+function filterSensors(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('.sensor-item').forEach(el => {
+    el.style.display = el.dataset.name.includes(q) ? '' : 'none';
+  });
+}
+
+function selectAllSensors(checked) {
+  document.querySelectorAll('.sensor-cb').forEach(cb => { cb.checked = checked; });
+  updateUrl();
+}
+
+function selectAllCols(checked) {
+  const cols = COLUMNS[currentDataType] || [];
+  if (checked) {
+    cols.forEach(c => checkedCols.add(c));
+  } else {
+    checkedCols.clear();
+  }
+  renderColumnList();
+  updateUrl();
+}
+
+// On page load: pre-select sensor from URL param (?sensors=X or ?sensor=X)
+function init() {
+  const params = new URLSearchParams(window.location.search);
+  const preselect = (params.get('sensors') || params.get('sensor') || '').split(',').filter(Boolean);
+  if (preselect.length) {
+    preselect.forEach(id => {
+      const cb = document.querySelector(`.sensor-cb[value="${id}"]`);
+      if (cb) cb.checked = true;
+    });
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const endEl = document.getElementById('dl-end');
+  if (endEl && !endEl.disabled && !endEl.value) endEl.value = today;
+  renderColumnList();
+  updateUrl();
+}
+init();
 </script>
 {% endblock %}

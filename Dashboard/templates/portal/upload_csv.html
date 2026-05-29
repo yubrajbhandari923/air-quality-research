@@ -1,13 +1,196 @@
 {% extends "base.html" %}
 {% block title %}Upload CSV — Portal{% endblock %}
+
 {% block content %}
-<div class="max-w-2xl mx-auto px-4 sm:px-6 py-12">
-  <h1 class="text-2xl font-bold text-slate-900 mb-2">Upload CSV</h1>
-  <p class="text-sm text-slate-500 mb-8">Upload a sensor CSV file for ingestion. The system will run the appropriate converter and log the result.</p>
-  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-    <p class="text-sm text-slate-600 mb-4">CSV upload UI coming soon. Use the management command for now:</p>
-    <code class="block text-xs bg-slate-900 text-green-400 rounded-lg p-4">uv run python manage.py run_ingestion --source belauri_csv</code>
-    <div class="mt-4"><a href="{% url 'portal:index' %}" class="btn-secondary text-sm">← Back to portal</a></div>
+<div class="max-w-4xl mx-auto px-4 sm:px-6 py-12">
+
+  <div class="mb-8">
+    <a href="{% url 'portal:index' %}" class="text-sm text-slate-500 hover:text-slate-700">← Portal</a>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">Upload CSV</h1>
+    <p class="mt-1 text-sm text-slate-500">
+      Upload a Particles Plus export or telemetry CSV. Sensors must be
+      <a href="{% url 'portal:sensor_register' %}" class="text-nao-blue hover:underline">registered</a> before uploading.
+    </p>
   </div>
+
+  {% if messages %}
+    {% for m in messages %}
+    <div class="mb-4 rounded-lg px-4 py-3 text-sm
+      {% if m.tags == 'success' %}bg-green-50 text-green-700 border border-green-200
+      {% elif m.tags == 'warning' %}bg-amber-50 text-amber-700 border border-amber-200
+      {% else %}bg-red-50 text-red-700 border border-red-200{% endif %}">
+      {{ m }}
+    </div>
+    {% endfor %}
+  {% endif %}
+
+  {# ── Upload result ───────────────────────────────────────────────── #}
+  {% if result %}
+  <div class="mb-8 rounded-xl border {% if result.status == 'SUCCESS' %}border-green-200 bg-green-50{% elif result.status == 'PARTIAL' %}border-amber-200 bg-amber-50{% else %}border-red-200 bg-red-50{% endif %} p-5">
+    <h3 class="font-semibold text-sm mb-2">
+      {% if result.status == 'SUCCESS' %}✓ Upload complete{% elif result.status == 'PARTIAL' %}⚠ Partial upload{% else %}✗ Upload failed{% endif %}
+      — {{ filename }}
+    </h3>
+    <dl class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+      <div><dt class="text-xs text-slate-500">Saved</dt><dd class="font-semibold text-slate-800">{{ result.saved|default:0 }}</dd></div>
+      <div><dt class="text-xs text-slate-500">Duplicates</dt><dd class="font-semibold text-slate-600">{{ result.duplicates|default:0 }}</dd></div>
+      <div><dt class="text-xs text-slate-500">Errors</dt><dd class="font-semibold {% if result.errors %}text-red-600{% else %}text-slate-400{% endif %}">{{ result.errors|default:0 }}</dd></div>
+      <div><dt class="text-xs text-slate-500">Status</dt><dd>{{ result.status }}</dd></div>
+    </dl>
+    {% if result.error %}<p class="mt-2 text-xs text-red-700">{{ result.error }}</p>{% endif %}
+    {% if result.skipped_serials %}<p class="mt-1 text-xs text-amber-700">Unregistered serials skipped: {{ result.skipped_serials|join:", " }}</p>{% endif %}
+  </div>
+  {% endif %}
+
+  {# ── Upload form ─────────────────────────────────────────────────── #}
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-8">
+    <h2 class="text-base font-semibold text-slate-800 mb-4">Select file</h2>
+    <form method="post" enctype="multipart/form-data" class="space-y-4">
+      {% csrf_token %}
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">CSV file <span class="text-red-500">*</span></label>
+        <input type="file" name="file" accept=".csv,text/csv" required
+               class="block w-full text-sm text-slate-600
+                      file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
+                      file:text-sm file:font-semibold file:bg-nao-blue file:text-white
+                      hover:file:bg-blue-700 cursor-pointer">
+        <p class="mt-1 text-xs text-slate-400">Max 100 MB. UTF-8 encoding.</p>
+      </div>
+      <button type="submit"
+              class="px-5 py-2.5 rounded-lg bg-nao-blue text-white text-sm font-semibold hover:bg-blue-700 transition-colors">
+        Upload and ingest
+      </button>
+    </form>
+  </div>
+
+  {# ── Registered sensors ──────────────────────────────────────────── #}
+  {% if sensors %}
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-8">
+    <h2 class="text-base font-semibold text-slate-800 mb-3">Registered sensors</h2>
+    <p class="text-xs text-slate-500 mb-3">Only data matching these serial numbers will be ingested.</p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Serial number</th>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Name</th>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Site</th>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Type</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for s in sensors %}
+          <tr>
+            <td class="px-3 py-2 font-mono text-slate-700">{{ s.serial_number }}</td>
+            <td class="px-3 py-2 text-slate-600">{{ s.display_name }}</td>
+            <td class="px-3 py-2 text-slate-500">{{ s.site.name|default:"—" }}</td>
+            <td class="px-3 py-2 text-slate-500">{% if s.is_indoor %}Indoor{% else %}Outdoor{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-3 text-xs text-slate-400">
+      Not listed? <a href="{% url 'portal:sensor_register' %}" class="text-nao-blue hover:underline">Register the sensor first.</a>
+    </p>
+  </div>
+  {% endif %}
+
+  {# ── Format reference ────────────────────────────────────────────── #}
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-base font-semibold text-slate-800 mb-4">CSV format reference</h2>
+
+    <div class="space-y-6 text-sm text-slate-700">
+
+      <div>
+        <h3 class="font-semibold text-slate-900 mb-1">Two accepted formats</h3>
+        <p class="text-slate-500 text-xs">The system auto-detects which format is used based on the header row.</p>
+      </div>
+
+      {# Format 1 #}
+      <div>
+        <h3 class="font-medium text-slate-800 mb-2">Format 1 — Full export (Particles Plus cloud / desktop)</h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs border border-slate-200 rounded-lg">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="text-left px-3 py-2 font-semibold text-slate-600">Column name</th>
+                <th class="text-left px-3 py-2 font-semibold text-slate-600">Required</th>
+                <th class="text-left px-3 py-2 font-semibold text-slate-600">Format / Notes</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="bg-amber-50"><td class="px-3 py-1.5 font-mono font-semibold">Timestamp</td><td class="px-3 py-1.5 text-green-700">Yes</td><td class="px-3 py-1.5 text-slate-500">MM/DD/YYYY HH:MM:SS (UTC). Second row may be a units row containing "UTC" — the system skips it automatically.</td></tr>
+              <tr class="bg-amber-50"><td class="px-3 py-1.5 font-mono font-semibold">Serial Number</td><td class="px-3 py-1.5 text-green-700">Yes</td><td class="px-3 py-1.5 text-slate-500">Must match a registered sensor's serial number exactly.</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM1.0</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM2.5</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM4.0</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM10</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM0.5 NC</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">#/cm³ — particle number concentration</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM1.0 NC</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">#/cm³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM2.5 NC</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">#/cm³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM4.0 NC</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">#/cm³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM10 NC</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">#/cm³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">CO2</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">ppm</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">CO</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">ppm</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">SO2</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">O3</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">NO2</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">CH2O</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³ — formaldehyde</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">VOC tVOC measurement</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">mg/m³ — total VOC</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">Barometric Pressure</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">inHg</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">Temperature</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">°C</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">Relative Humidity</td><td class="px-3 py-1.5 text-slate-400">Optional</td><td class="px-3 py-1.5 text-slate-500">%</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="mt-2 text-xs text-slate-400">
+          Columns like "Applied PM2.5 Custom Calibration Setting – Multiplication Factor", "PM2.5 AQI",
+          and sensor-status columns are skipped automatically.
+        </p>
+      </div>
+
+      {# Format 2 #}
+      <div>
+        <h3 class="font-medium text-slate-800 mb-2">Format 2 — Telemetry (low-bandwidth device export)</h3>
+        <p class="text-xs text-slate-500 mb-2">Detected by the presence of a lowercase <code>timestamp</code> column and <code>PM 1.0</code> column.</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs border border-slate-200 rounded-lg">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="text-left px-3 py-2 font-semibold text-slate-600">Column name</th>
+                <th class="text-left px-3 py-2 font-semibold text-slate-600">Required</th>
+                <th class="text-left px-3 py-2 font-semibold text-slate-600">Format</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="bg-amber-50"><td class="px-3 py-1.5 font-mono font-semibold">timestamp</td><td class="px-3 py-1.5 text-green-700">Yes</td><td class="px-3 py-1.5 text-slate-500">ISO 8601 UTC — e.g. <code>2026-03-01T00:00:26Z</code></td></tr>
+              <tr class="bg-amber-50"><td class="px-3 py-1.5 font-mono font-semibold">device_serial</td><td class="px-3 py-1.5 text-green-700">Yes</td><td class="px-3 py-1.5 text-slate-500">Must match a registered sensor serial.</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM 1.0</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM 2.5</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM 4.0</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">PM 10</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">µg/m³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">NC 0.5 / NC 1.0 / NC 2.5 / NC 4.0 / NC 10</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">#/cm³</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">Temperature</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">°C</td></tr>
+              <tr><td class="px-3 py-1.5 font-mono">Relative Humidity</td><td class="px-3 py-1.5">Optional</td><td class="px-3 py-1.5 text-slate-500">%</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {# Conflict / duplicate policy #}
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <h3 class="font-semibold text-slate-900 mb-1">Duplicate and conflict handling</h3>
+        <ul class="list-disc list-inside space-y-1 text-xs text-slate-600">
+          <li><strong>Exact duplicates</strong> (same sensor + pollutant + timestamp + value) are silently skipped and counted in "Duplicates".</li>
+          <li><strong>Conflicts</strong> (same sensor + pollutant + timestamp but different value): the existing row is kept; the new row is stored with <code>is_duplicate=True</code> and a <code>flag_reason</code> noting the conflict. Both are visible in the admin.</li>
+          <li>Rows with missing timestamps or unrecognised serial numbers are skipped.</li>
+          <li>Quality flags (GOOD / SUSPECT / BAD / MISSING) are automatically assigned based on measurement ranges. You can override them in Django admin.</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
 </div>
 {% endblock %}

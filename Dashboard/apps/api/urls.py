@@ -6,8 +6,14 @@ from . import views
 app_name = "api"
 
 urlpatterns = [
-    # Readings
+    # Readings — single timestamp (live sensor)
     path("readings/", views.ReadingListView.as_view(), name="readings"),
+
+    # Readings — batch (offline catch-up / scraper)
+    path("readings/batch/", views.BatchReadingView.as_view(), name="readings_batch"),
+
+    # Aggregation trigger (maintainer/admin)
+    path("aggregate/", views.AggregationTriggerView.as_view(), name="aggregate"),
 
     # CSV/JSON export (access-level controlled)
     path("export/", views.ExportReadingsView.as_view(), name="export"),

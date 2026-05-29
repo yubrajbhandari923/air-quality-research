@@ -16,11 +16,14 @@ Public views (no login required):
   AboutView            GET /about/
 
 Portal views (login required, role-gated):
-  PortalIndexView      GET /portal/
-  IngestionLogsView    GET /portal/ingestion-logs/
-  UploadCSVView        GET/POST /portal/upload-csv/
-  APIKeysView          GET /portal/api-keys/
-  RunIngestionView     POST /portal/run-ingestion/
+  PortalIndexView            GET  /portal/
+  IngestionLogsView          GET  /portal/ingestion-logs/
+  UploadCSVView              GET/POST /portal/upload-csv/
+  APIKeysView                GET/POST /portal/api-keys/
+  RunIngestionView           GET  /portal/run-ingestion/
+  SensorRegisterPortalView   GET/POST /portal/sensors/register/
+  SensorListPortalView       GET  /portal/sensors/
+  AggregationView            GET/POST /portal/aggregate/
 """
 import json
 import logging
@@ -29,7 +32,7 @@ from datetime import timedelta
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Avg, Count, Max, Min
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
 from django.views.generic import TemplateView, View
 
@@ -360,18 +363,51 @@ class SensorDetailView(TemplateView):
                 .first()
             )
 
+        # Last data date and 90-day availability grid from DailyAggregate
+        from apps.readings.models import DailyAggregate
+        import datetime as _dt
+
+        last_agg = (
+            DailyAggregate.objects
+            .filter(sensor=sensor, pollutant="PM25")
+            .order_by("-date")
+            .values("date", "mean", "count")
+            .first()
+        )
+        last_data_date = last_agg["date"] if last_agg else None
+        last_data_mean = round(float(last_agg["mean"]), 1) if last_agg and last_agg["mean"] else None
+
+        # Build a set of dates that have data in the last 90 days
+        cutoff_90 = timezone.now().date() - _dt.timedelta(days=89)
+        avail_dates = set(
+            DailyAggregate.objects
+            .filter(sensor=sensor, pollutant="PM25", date__gte=cutoff_90)
+            .values_list("date", flat=True)
+        )
+        # Also include days from CanonicalReading for very recent data not yet aggregated
+        recent_cr_dates = set(
+            CanonicalReading.objects
+            .filter(sensor=sensor, pollutant="PM25",
+                    original_ts__gte=timezone.now() - timedelta(days=3))
+            .dates("original_ts", "day")
+        )
+        avail_dates |= recent_cr_dates
+
         ctx.update({
-            "sensor":         sensor,
-            "stats_24h":      stats_24h,
-            "pm25_avg_24h":   round(pm25_avg, 1) if pm25_avg else None,
-            "pm25_category":  category,
-            "pm25_colour":    colour,
-            "exceeds_who":    (pm25_avg or 0) > WHO_24H,
-            "exceeds_nepal":  (pm25_avg or 0) > NEPAL_NAAQS_24H,
-            "who_24h":        WHO_24H,
-            "nepal_naaqs_24h": NEPAL_NAAQS_24H,
-            "companion":      companion,
+            "sensor":           sensor,
+            "stats_24h":        stats_24h,
+            "pm25_avg_24h":     round(pm25_avg, 1) if pm25_avg else None,
+            "pm25_category":    category,
+            "pm25_colour":      colour,
+            "exceeds_who":      (pm25_avg or 0) > WHO_24H,
+            "exceeds_nepal":    (pm25_avg or 0) > NEPAL_NAAQS_24H,
+            "who_24h":          WHO_24H,
+            "nepal_naaqs_24h":  NEPAL_NAAQS_24H,
+            "companion":        companion,
             "maintenance_logs": sensor.maintenance_logs.order_by("-event_date")[:10],
+            "last_data_date":   last_data_date,
+            "last_data_mean":   last_data_mean,
+            "avail_dates_json": sorted(d.isoformat() for d in avail_dates),
         })
         return ctx
 
@@ -571,6 +607,12 @@ class DataAccessView(TemplateView):
                  "site": s.site.name if s.site else "", "is_indoor": s.is_indoor}
                 for s in sensors
             ]),
+            "pollutants_choices": [
+                ("PM25", "PM₂.₅"), ("PM10", "PM₁₀"), ("PM1", "PM₁"), ("PM4", "PM₄"),
+                ("CO2", "CO₂"), ("TVOC", "TVOC"), ("TEMP", "Temperature"),
+                ("RH", "Humidity"), ("BARO", "Pressure"), ("CO", "CO"),
+                ("NO2", "NO₂"), ("O3", "O₃"), ("SO2", "SO₂"),
+            ],
             "api_endpoints":   API_ENDPOINTS,
             "data_dictionary": DATA_DICTIONARY,
             "dl_cfg":          dl_cfg,
@@ -622,20 +664,363 @@ class IngestionLogsView(PortalRequiredMixin, TemplateView):
         return ctx
 
 
-class UploadCSVView(PortalRequiredMixin, TemplateView):
-    template_name = "portal/upload_csv.html"
-    allowed_roles = ("RESEARCHER", "ADMIN")
+class SensorRegisterPortalView(PortalRequiredMixin, View):
+    """
+    GET  /portal/sensors/register/ — show registration form
+    POST /portal/sensors/register/ — create site (if needed) + sensor
+    """
+
+    template_name = "portal/sensor_register.html"
+    allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
+
+    def get(self, request):
+        from apps.sensors.models import Site
+        ctx = {
+            "sites": Site.objects.order_by("name"),
+            "power_choices": Sensor.PowerType.choices,
+            "connectivity_choices": Sensor.ConnectivityType.choices,
+            "land_use_choices": Site.LandUse.choices,
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request):
+        from django.contrib import messages
+        from apps.sensors.models import Site
+
+        data = request.POST
+        errors = []
+
+        serial = data.get("serial_number", "").strip()
+        if not serial:
+            errors.append("Serial number is required.")
+
+        # Resolve or create site
+        existing_site_id = data.get("site_id", "").strip()
+        site = None
+        if existing_site_id:
+            try:
+                site = Site.objects.get(pk=existing_site_id)
+            except Site.DoesNotExist:
+                errors.append("Selected site not found.")
+        else:
+            site_name = data.get("site_name", "").strip()
+            district   = data.get("district", "").strip()
+            lat_raw    = data.get("latitude", "").strip()
+            lon_raw    = data.get("longitude", "").strip()
+            if not site_name or not district or not lat_raw or not lon_raw:
+                errors.append("Site name, district, latitude, and longitude are required when creating a new site.")
+            else:
+                try:
+                    lat = float(lat_raw); lon = float(lon_raw)
+                except ValueError:
+                    errors.append("Latitude and longitude must be numeric decimal degrees.")
+                    lat = lon = None
+                if lat is not None:
+                    site, created = Site.objects.get_or_create(
+                        name=site_name,
+                        defaults={
+                            "district": district,
+                            "municipality": data.get("municipality", ""),
+                            "province": data.get("province", ""),
+                            "latitude": lat,
+                            "longitude": lon,
+                            "elevation_m": float(data.get("elevation_m") or 0) or None,
+                            "land_use_type": data.get("land_use_type", "RESIDENTIAL"),
+                            "description": data.get("site_description", ""),
+                        },
+                    )
+
+        if errors:
+            from apps.sensors.models import Site
+            ctx = {
+                "sites": Site.objects.order_by("name"),
+                "power_choices": Sensor.PowerType.choices,
+                "connectivity_choices": Sensor.ConnectivityType.choices,
+                "land_use_choices": Site.LandUse.choices,
+                "errors": errors,
+                "form_data": data,
+            }
+            return render(request, self.template_name, ctx)
+
+        # Check serial uniqueness
+        if Sensor.objects.filter(serial_number=serial).exists():
+            messages.warning(request, f"Sensor {serial} is already registered.")
+            from django.shortcuts import redirect
+            return redirect("portal:sensor_list")
+
+        sensor = Sensor.objects.create(
+            serial_number=serial,
+            friendly_name=data.get("friendly_name", "").strip(),
+            model=data.get("model", "").strip(),
+            manufacturer=data.get("manufacturer", "Particles Plus").strip() or "Particles Plus",
+            site=site,
+            is_indoor=data.get("is_indoor") == "1",
+            power_type=data.get("power_type", "UNKNOWN"),
+            connectivity_type=data.get("connectivity_type", "WIFI"),
+            status=Sensor.Status.ACTIVE,
+            installation_notes=data.get("installation_notes", ""),
+        )
+        if data.get("installed_at"):
+            try:
+                from django.utils.dateparse import parse_date
+                d = parse_date(data["installed_at"])
+                if d:
+                    from datetime import datetime, timezone as dt_tz
+                    sensor.installed_at = datetime(d.year, d.month, d.day, tzinfo=dt_tz.utc)
+                    sensor.save(update_fields=["installed_at"])
+            except Exception:
+                pass
+
+        messages.success(request, f"Sensor {sensor.display_name} (#{sensor.pk}) registered successfully.")
+        from django.shortcuts import redirect
+        return redirect("portal:sensor_list")
 
 
-class APIKeysView(PortalRequiredMixin, TemplateView):
-    template_name = "portal/api_keys.html"
-    allowed_roles = ("RESEARCHER", "ADMIN")
+class SensorListPortalView(PortalRequiredMixin, TemplateView):
+    """GET /portal/sensors/ — list all registered sensors with quick actions."""
+
+    template_name = "portal/sensor_list.html"
+    allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        from apps.api.models import APIKey
-        ctx["api_keys"] = APIKey.objects.filter(user=self.request.user, is_active=True)
+        ctx["sensors"] = Sensor.objects.select_related("site").order_by("site__name", "serial_number")
         return ctx
+
+
+class SensorUploadView(PortalRequiredMixin, View):
+    """
+    GET  /portal/sensors/<pk>/upload/ — upload form for a specific sensor
+    POST /portal/sensors/<pk>/upload/ — process the CSV, returns JSON
+    """
+
+    template_name = "portal/sensor_upload.html"
+    allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
+
+    def get(self, request, pk):
+        sensor = get_object_or_404(Sensor.objects.select_related("site"), pk=pk)
+        return render(request, self.template_name, {"sensor": sensor})
+
+    def post(self, request, pk):
+        from apps.ingestion.converters.generic_csv_converter import GenericCSVConverter
+
+        sensor = get_object_or_404(Sensor.objects.select_related("site"), pk=pk)
+        uploaded = request.FILES.get("file")
+
+        if not uploaded:
+            return JsonResponse({"status": "FAILED", "error": "No file selected."}, status=400)
+
+        if uploaded.size > 100 * 1024 * 1024:
+            return JsonResponse({"status": "FAILED", "error": "File exceeds 100 MB limit."}, status=400)
+
+        converter = GenericCSVConverter()
+        result = converter.run(
+            source=uploaded,
+            triggered_by=request.user,
+            dataset_name=f"Upload: {sensor.serial_number} — {uploaded.name}",
+        )
+        result["filename"] = uploaded.name
+        result["sensor_serial"] = sensor.serial_number
+
+        # Fire background aggregation for sensors that received new raw data
+        if result.get("saved", 0) > 0:
+            from apps.ingestion.tasks import aggregate_after_upload
+            dispatch = aggregate_after_upload(result.get("sensor_ids") or [sensor.pk])
+            result["aggregation_dispatch"] = dispatch
+
+        return JsonResponse(result)
+
+
+class UploadCSVView(PortalRequiredMixin, View):
+    """
+    GET  /portal/upload-csv/ — show upload form with format documentation
+    POST /portal/upload-csv/ — run GenericCSVConverter on the uploaded file
+    """
+
+    template_name = "portal/upload_csv.html"
+    allowed_roles = ("RESEARCHER", "ADMIN", "MAINTAINER")
+
+    def get(self, request):
+        ctx = {
+            "sensors": Sensor.objects.select_related("site").order_by("site__name", "serial_number"),
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request):
+        from django.contrib import messages
+        from apps.ingestion.converters.generic_csv_converter import GenericCSVConverter
+
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            messages.error(request, "No file selected.")
+            return render(request, self.template_name, {
+                "sensors": Sensor.objects.select_related("site").order_by("site__name"),
+            })
+
+        max_mb = 100
+        if uploaded.size > max_mb * 1024 * 1024:
+            messages.error(request, f"File exceeds {max_mb} MB limit.")
+            return render(request, self.template_name, {
+                "sensors": Sensor.objects.select_related("site").order_by("site__name"),
+            })
+
+        converter = GenericCSVConverter()
+        result = converter.run(
+            source=uploaded,
+            triggered_by=request.user,
+            dataset_name=f"Portal upload: {uploaded.name}",
+        )
+
+        # Fire background aggregation so charts update without blocking the user
+        if result.get("saved", 0) > 0 and result.get("sensor_ids"):
+            from apps.ingestion.tasks import aggregate_after_upload
+            aggregate_after_upload(result["sensor_ids"])
+
+        ctx = {
+            "sensors": Sensor.objects.select_related("site").order_by("site__name", "serial_number"),
+            "result": result,
+            "filename": uploaded.name,
+        }
+
+        if result["status"] in ("SUCCESS", "PARTIAL"):
+            messages.success(
+                request,
+                f"Ingested {result['saved']:,} readings "
+                f"({result['duplicates']:,} duplicates skipped). "
+                f"Hourly/daily aggregation is running in the background."
+            )
+            if result.get("skipped_serials"):
+                messages.warning(
+                    request,
+                    "Unknown sensor serials (not registered) were skipped: "
+                    + ", ".join(result["skipped_serials"]),
+                )
+        else:
+            messages.error(request, f"Ingestion failed: {result.get('error', 'Unknown error')}")
+
+        return render(request, self.template_name, ctx)
+
+
+class APIKeysView(PortalRequiredMixin, View):
+    """
+    GET  /portal/api-keys/  — list keys + show create form
+    POST /portal/api-keys/  — create a new API key
+    """
+
+    template_name = "portal/api_keys.html"
+    allowed_roles = ("RESEARCHER", "ADMIN", "MAINTAINER")
+
+    def get(self, request):
+        from apps.api.models import APIKey
+        ctx = {
+            "api_keys": APIKey.objects.filter(user=request.user, is_active=True).select_related("sensor"),
+            "sensors": Sensor.objects.select_related("site").order_by("site__name"),
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request):
+        from django.contrib import messages
+        from apps.api.models import APIKey
+
+        action = request.POST.get("action")
+
+        if action == "revoke":
+            key_id = request.POST.get("key_id")
+            try:
+                key = APIKey.objects.get(pk=key_id, user=request.user)
+                key.is_active = False
+                key.save(update_fields=["is_active"])
+                messages.success(request, "API key revoked.")
+            except APIKey.DoesNotExist:
+                messages.error(request, "Key not found.")
+        else:
+            name = request.POST.get("name", "").strip()
+            role = request.POST.get("role", "SENSOR")
+            sensor_id = request.POST.get("sensor_id", "").strip()
+
+            if not name:
+                messages.error(request, "Key name is required.")
+            else:
+                sensor = None
+                if sensor_id:
+                    try:
+                        sensor = Sensor.objects.get(pk=sensor_id)
+                    except Sensor.DoesNotExist:
+                        messages.warning(request, "Sensor not found — key created without sensor binding.")
+
+                key_obj, raw_key = APIKey.generate(name=name, role=role, user=request.user)
+                if sensor:
+                    key_obj.sensor = sensor
+                    key_obj.save(update_fields=["sensor"])
+
+                messages.success(request, f"Key created. Copy it now — it won't be shown again: {raw_key}")
+
+        from django.shortcuts import redirect
+        return redirect("portal:api_keys")
+
+
+class AggregationView(PortalRequiredMixin, View):
+    """
+    GET  /portal/aggregate/ — show aggregation form
+    POST /portal/aggregate/ — run synchronous aggregation + optionally write Parquet
+    """
+
+    template_name = "portal/aggregation.html"
+    allowed_roles = ("MAINTAINER", "ADMIN")
+
+    def get(self, request):
+        ctx = {
+            "sensors": Sensor.objects.select_related("site").order_by("site__name"),
+        }
+        return render(request, self.template_name, ctx)
+
+    def post(self, request):
+        from django.contrib import messages
+        from apps.ingestion.tasks import compute_aggregates, write_parquet
+
+        sensor_id = request.POST.get("sensor_id") or None
+        since_str = request.POST.get("since") or None
+        do_parquet = request.POST.get("write_parquet") == "1"
+
+        since = None
+        if since_str:
+            from datetime import datetime, timezone as dt_tz
+            try:
+                from django.utils.dateparse import parse_date
+                d = parse_date(since_str)
+                if d:
+                    since = datetime(d.year, d.month, d.day, tzinfo=dt_tz.utc)
+            except Exception:
+                messages.error(request, f"Invalid date: {since_str}")
+
+        result = compute_aggregates(
+            sensor_id=int(sensor_id) if sensor_id else None,
+            since=since,
+        )
+
+        parquet_result = None
+        if do_parquet:
+            from apps.sensors.models import Sensor as _Sensor
+            target_sensors = [_Sensor.objects.get(pk=sensor_id)] if sensor_id else list(_Sensor.objects.all())
+            rows_written = 0
+            for s in target_sensors:
+                pr = write_parquet(s.pk)
+                rows_written += pr.get("rows_written", 0)
+            parquet_result = {"rows_written": rows_written}
+
+        messages.success(
+            request,
+            f"Aggregation complete — {result['hourly_rows']:,} hourly rows, "
+            f"{result['daily_rows']:,} daily rows updated across "
+            f"{result['sensors_processed']} sensor(s)."
+        )
+
+        ctx = {
+            "sensors": Sensor.objects.select_related("site").order_by("site__name"),
+            "result": result,
+            "parquet_result": parquet_result,
+        }
+        return render(request, self.template_name, ctx)
 
 
 class RunIngestionView(PortalRequiredMixin, TemplateView):

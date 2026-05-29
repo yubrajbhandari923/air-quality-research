@@ -68,50 +68,168 @@
     </div>
   </div>
 
-  <!-- Time-series chart -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-sm font-semibold text-gray-700">PM2.5 Time Series</h2>
-      <div class="flex space-x-2">
-        <select id="pollutant-select" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600">
-          <option value="PM25">PM2.5</option>
-          <option value="PM10">PM10</option>
-          <option value="PM1">PM1</option>
-          <option value="TEMP">Temperature</option>
-          <option value="RH">Humidity</option>
-          {% if sensor.is_indoor %}
-          <option value="CO2">CO2</option>
-          <option value="TVOC">Total VOC</option>
-          {% endif %}
-        </select>
-        <select id="time-range-select" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600">
-          <option value="24h">Last 24h</option>
-          <option value="7d" selected>Last 7 days</option>
-          <option value="30d">Last 30 days</option>
-        </select>
+  <!-- Date range controls (shared across all charts) -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Date range</span>
+
+      <!-- Quick-range buttons (anchored to latest available data) -->
+      <div class="flex items-center gap-1">
+        <button onclick="setWindow('1d')"  class="range-btn" data-window="1d">1 day</button>
+        <span id="live-badge"
+          class="hidden ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs
+                 bg-green-50 border border-green-200 text-green-700 font-medium">
+          <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block"></span>
+          Live
+        </span>
+        <button onclick="setWindow('7d')"  class="range-btn active" data-window="7d">7 days</button>
+        <button onclick="setWindow('30d')" class="range-btn" data-window="30d">30 days</button>
+        <button onclick="setWindow('90d')" class="range-btn" data-window="90d">90 days</button>
       </div>
+
+      <span class="text-gray-200 hidden sm:inline">|</span>
+
+      <!-- Custom range -->
+      <div class="flex items-center gap-2">
+        <label class="text-xs text-gray-400">From</label>
+        <input type="date" id="custom-start" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600">
+        <label class="text-xs text-gray-400">To</label>
+        <input type="date" id="custom-end" class="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600">
+        <button onclick="applyCustomRange()" class="text-xs px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700">Apply</button>
+      </div>
+
+      <span id="range-label" class="text-xs text-gray-400 ml-auto"></span>
     </div>
-    <!-- WHO/Nepal guideline lines will be drawn by JS -->
-    <canvas id="timeseries-chart" height="90"></canvas>
+  </div>
+
+  <!-- PM2.5 chart -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-semibold text-gray-700">PM₂.₅ <span class="font-normal text-gray-400">µg/m³</span></h2>
+      <span id="pm25-pts" class="text-xs text-gray-400"></span>
+    </div>
+    <div style="position:relative; height:280px;">
+      <canvas id="chart-pm25"></canvas>
+    </div>
     <p class="text-xs text-gray-400 mt-2">
-      Red dashed = Nepal NAAQS ({{ nepal_naaqs_24h }} µg/m³) &nbsp;|&nbsp;
-      Blue dashed = WHO 24h ({{ who_24h }} µg/m³)
+      <span class="inline-block w-4 border-t-2 border-dashed border-red-400 mr-1 align-middle"></span>Nepal NAAQS {{ nepal_naaqs_24h }} µg/m³
+      &nbsp;
+      <span class="inline-block w-4 border-t-2 border-dashed border-indigo-400 mr-1 align-middle"></span>WHO 24h {{ who_24h }} µg/m³
     </p>
   </div>
 
-  <!-- Completeness chart -->
+  <!-- PM10 chart -->
   <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-    <h2 class="text-sm font-semibold text-gray-700 mb-4">Data Completeness (30 days)</h2>
-    <canvas id="completeness-chart" height="50"></canvas>
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-semibold text-gray-700">PM₁₀ <span class="font-normal text-gray-400">µg/m³</span></h2>
+      <span id="pm10-pts" class="text-xs text-gray-400"></span>
+    </div>
+    <div style="position:relative; height:240px;">
+      <canvas id="chart-pm10"></canvas>
+    </div>
+  </div>
+
+  <!-- PM1 chart -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-sm font-semibold text-gray-700">PM₁ <span class="font-normal text-gray-400">µg/m³</span></h2>
+      <span id="pm1-pts" class="text-xs text-gray-400"></span>
+    </div>
+    <div style="position:relative; height:240px;">
+      <canvas id="chart-pm1"></canvas>
+    </div>
+  </div>
+
+  <!-- Temperature + Humidity side by side -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-sm font-semibold text-gray-700">Temperature <span class="font-normal text-gray-400">°C</span></h2>
+        <span id="temp-pts" class="text-xs text-gray-400"></span>
+      </div>
+      <div style="position:relative; height:210px;">
+        <canvas id="chart-temp"></canvas>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-sm font-semibold text-gray-700">Relative Humidity <span class="font-normal text-gray-400">%</span></h2>
+        <span id="rh-pts" class="text-xs text-gray-400"></span>
+      </div>
+      <div style="position:relative; height:210px;">
+        <canvas id="chart-rh"></canvas>
+      </div>
+    </div>
+  </div>
+
+  {% if sensor.is_indoor %}
+  <!-- CO2 + TVOC for indoor sensors -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-sm font-semibold text-gray-700">CO₂ <span class="font-normal text-gray-400">ppm</span></h2>
+        <span id="co2-pts" class="text-xs text-gray-400"></span>
+      </div>
+      <div style="position:relative; height:210px;">
+        <canvas id="chart-co2"></canvas>
+      </div>
+      <p class="text-xs text-gray-400 mt-1">
+        <span class="inline-block w-4 border-t-2 border-dashed border-orange-400 mr-1 align-middle"></span>Outdoor ambient 400 ppm
+        &nbsp;
+        <span class="inline-block w-4 border-t-2 border-dashed border-red-400 mr-1 align-middle"></span>Poor ventilation 1000 ppm
+      </p>
+    </div>
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-sm font-semibold text-gray-700">Total VOC <span class="font-normal text-gray-400">mg/m³</span></h2>
+        <span id="tvoc-pts" class="text-xs text-gray-400"></span>
+      </div>
+      <div style="position:relative; height:210px;">
+        <canvas id="chart-tvoc"></canvas>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Data completeness -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-4">Data Completeness (last 30 available days)</h2>
+    <div style="position:relative; height:140px;">
+      <canvas id="completeness-chart"></canvas>
+    </div>
     <p class="text-xs text-gray-400 mt-2">
-      Bars show % of expected 15-minute readings received each day.
-      Green ≥ 80%, Yellow 50–80%, Red &lt; 50%.
+      Bars show % of expected 1-minute readings received each day.
+      <span class="text-green-600 font-medium">Green ≥ 80%</span>,
+      <span class="text-yellow-600 font-medium">Yellow 50–80%</span>,
+      <span class="text-red-500 font-medium">Red &lt; 50%</span>.
     </p>
+  </div>
+
+  <!-- Download -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-3">Download Data</h2>
+    <div class="flex flex-wrap gap-2">
+      <a href="/data/?sensors={{ sensor.pk }}"
+         class="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium">
+        Open download wizard →
+      </a>
+      <a href="/api/v1/export/?sensors={{ sensor.pk }}&quality=GOOD&data_type=raw"
+         class="text-xs px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50">
+        Raw CSV
+      </a>
+      <a href="/api/v1/export/?sensors={{ sensor.pk }}&quality=GOOD&data_type=hourly"
+         class="text-xs px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50">
+        Hourly CSV
+      </a>
+      <a href="/api/v1/export/?sensors={{ sensor.pk }}&quality=GOOD&data_type=daily"
+         class="text-xs px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50">
+        Daily CSV
+      </a>
+    </div>
   </div>
 
   <!-- Metadata + Maintenance -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-    <!-- Sensor metadata -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
       <h2 class="text-sm font-semibold text-gray-700 mb-3">Sensor Information</h2>
       <dl class="space-y-2 text-sm">
@@ -156,7 +274,6 @@
       {% endif %}
     </div>
 
-    <!-- Maintenance log -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
       <h2 class="text-sm font-semibold text-gray-700 mb-3">Maintenance Log</h2>
       {% if maintenance_logs %}
@@ -186,106 +303,172 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
-const SENSOR_ID = {{ sensor.pk }};
-const WHO_24H = {{ who_24h }};
-const NEPAL_24H = {{ nepal_naaqs_24h }};
+<style>
+.range-btn {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 9999px;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+  background: #f9fafb;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.range-btn:hover { background: #f3f4f6; color: #374151; }
+.range-btn.active { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+</style>
 
-// Helper to get ISO datetime N days ago
-function daysAgo(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString();
+<script>
+const SENSOR_ID   = {{ sensor.pk }};
+const WHO_24H     = {{ who_24h }};
+const NEPAL_24H   = {{ nepal_naaqs_24h }};
+const IS_INDOOR   = {{ sensor.is_indoor|yesno:"true,false" }};
+
+// State
+let currentWindow = '7d';
+let customStart   = null;
+let customEnd     = null;
+let charts        = {};  // pollutant → Chart instance
+
+// Chart colour palette
+const PALETTE = {
+  PM25: { border: '#3b82f6', bg: 'rgba(59,130,246,0.08)' },
+  PM10: { border: '#10b981', bg: 'rgba(16,185,129,0.08)' },
+  PM1:  { border: '#8b5cf6', bg: 'rgba(139,92,246,0.08)' },
+  TEMP: { border: '#f59e0b', bg: 'rgba(245,158,11,0.08)' },
+  RH:   { border: '#06b6d4', bg: 'rgba(6,182,212,0.08)'  },
+  CO2:  { border: '#f97316', bg: 'rgba(249,115,22,0.08)' },
+  TVOC: { border: '#84cc16', bg: 'rgba(132,204,22,0.08)' },
+};
+
+const UNITS = {
+  PM25: 'µg/m³', PM10: 'µg/m³', PM1: 'µg/m³',
+  TEMP: '°C', RH: '%', CO2: 'ppm', TVOC: 'mg/m³',
+};
+
+function buildUrl(pollutant) {
+  const base = `/api/v1/charts/sensor/${SENSOR_ID}/timeseries/?pollutant=${pollutant}`;
+  if (customStart && customEnd) {
+    return `${base}&start=${customStart}T00:00:00Z&end=${customEnd}T23:59:59Z`;
+  }
+  return `${base}&anchor=latest&window=${currentWindow}`;
 }
 
-let tsChart = null;
-
-async function loadTimeSeries(pollutant, timeRange) {
-  const rangeMap = {'24h': 1, '7d': 7, '30d': 30};
-  const days = rangeMap[timeRange] || 7;
-  const start = daysAgo(days);
-
-  const resp = await fetch(`/api/v1/charts/sensor/${SENSOR_ID}/timeseries/?pollutant=${pollutant}&start=${start}`);
+async function loadChart(pollutant, canvasId, ptsBadgeId, extraDatasets) {
+  const resp = await fetch(buildUrl(pollutant));
+  if (!resp.ok) return;
   const data = await resp.json();
 
-  const labels = data.points.map(p => new Date(p.ts));
-  const values = data.points.map(p => p.value);
+  const resolution = data.resolution || 'raw';
+  const timeUnit   = data.time_unit  || 'hour';
 
-  const ctx = document.getElementById('timeseries-chart').getContext('2d');
-  if (tsChart) tsChart.destroy();
+  const ptsEl = document.getElementById(ptsBadgeId);
+  if (ptsEl) {
+    const resLabel = resolution === 'raw' ? 'min' : resolution === 'hourly' ? 'hrly' : 'daily';
+    ptsEl.textContent = data.total_points
+      ? `${data.total_points.toLocaleString()} pts · ${resLabel}`
+      : '';
+  }
 
-  const isPM = ['PM25', 'PM10', 'PM1', 'PM4'].includes(pollutant);
+  if (pollutant === 'PM25' && data.data_start && data.data_end) {
+    const fmt = ts => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    document.getElementById('range-label').textContent = `${fmt(data.data_start)} – ${fmt(data.data_end)}`;
+  }
 
-  tsChart = new Chart(ctx, {
+  const labels = (data.points || []).map(p => new Date(p.ts));
+  const values = (data.points || []).map(p => p.value);
+  const c = PALETTE[pollutant] || PALETTE.PM25;
+
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  if (charts[pollutant]) charts[pollutant].destroy();
+
+  charts[pollutant] = new Chart(ctx, {
     type: 'line',
     data: {
       labels,
       datasets: [
         {
-          label: `${pollutant}`,
+          label: pollutant,
           data: values,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59,130,246,0.08)',
-          borderWidth: 1.5,
-          pointRadius: values.length > 200 ? 0 : 2,
+          borderColor: c.border,
+          backgroundColor: c.bg,
+          borderWidth: resolution === 'raw' ? 1.2 : 1.8,
+          pointRadius: resolution === 'daily' ? 3 : (values.length > 200 ? 0 : 2),
           fill: true,
           tension: 0.2,
+          spanGaps: false,
         },
-        ...(isPM && pollutant === 'PM25' ? [
-          {
-            label: 'Nepal NAAQS (40)',
-            data: labels.map(() => NEPAL_24H),
-            borderColor: '#ef4444',
-            borderDash: [6, 4],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            fill: false,
-          },
-          {
-            label: 'WHO 24h (15)',
-            data: labels.map(() => WHO_24H),
-            borderColor: '#6366f1',
-            borderDash: [6, 4],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            fill: false,
-          },
-        ] : []),
+        ...(extraDatasets ? extraDatasets(labels) : []),
       ],
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { labels: { boxWidth: 14, font: { size: 11 } } },
+        legend: { display: !!(extraDatasets), labels: { boxWidth: 14, font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) : '—'} ${UNITS[pollutant] || ''}` } },
       },
       scales: {
         x: {
           type: 'time',
-          time: { tooltipFormat: 'MMM d, HH:mm' },
-          ticks: { font: { size: 10 } },
+          time: {
+            unit: timeUnit,
+            tooltipFormat: resolution === 'daily' ? 'MMM d, yyyy' : 'MMM d, HH:mm',
+            displayFormats: { hour: 'HH:mm', day: 'MMM d', week: 'MMM d' },
+          },
+          ticks: { font: { size: 10 }, maxTicksLimit: timeUnit === 'hour' ? 12 : 10 },
+          grid: { display: false },
         },
         y: {
-          beginAtZero: true,
+          beginAtZero: pollutant !== 'TEMP',
           ticks: { font: { size: 10 } },
-          title: {
-            display: true,
-            text: pollutant === 'TEMP' ? '°C' : pollutant === 'RH' ? '%' :
-                  pollutant === 'CO2' ? 'ppm' : 'µg/m³',
-            font: { size: 10 },
-          },
+          title: { display: true, text: UNITS[pollutant] || '', font: { size: 10 } },
         },
       },
     },
   });
 }
 
+function pm25GuidelineDatasets(labels) {
+  return [
+    {
+      label: `Nepal NAAQS (${NEPAL_24H})`,
+      data: labels.map(() => NEPAL_24H),
+      borderColor: '#ef4444',
+      borderDash: [6, 4],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: false,
+    },
+    {
+      label: `WHO 24h (${WHO_24H})`,
+      data: labels.map(() => WHO_24H),
+      borderColor: '#6366f1',
+      borderDash: [6, 4],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      fill: false,
+    },
+  ];
+}
+
+function co2GuidelineDatasets(labels) {
+  return [
+    { label: 'Outdoor ~400 ppm', data: labels.map(() => 400), borderColor: '#f97316', borderDash: [4,3], borderWidth: 1, pointRadius: 0, fill: false },
+    { label: 'Poor ventilation 1000 ppm', data: labels.map(() => 1000), borderColor: '#ef4444', borderDash: [4,3], borderWidth: 1, pointRadius: 0, fill: false },
+  ];
+}
+
 async function loadCompleteness() {
   const resp = await fetch(`/api/v1/charts/sensor/${SENSOR_ID}/completeness/`);
+  if (!resp.ok) return;
   const data = await resp.json();
 
   const ctx = document.getElementById('completeness-chart').getContext('2d');
-  new Chart(ctx, {
+  if (charts['completeness']) charts['completeness'].destroy();
+
+  charts['completeness'] = new Chart(ctx, {
     type: 'bar',
     data: {
       labels: data.data.map(d => d.date),
@@ -301,28 +484,76 @@ async function loadCompleteness() {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        y: {
-          min: 0, max: 100,
-          ticks: { callback: v => v + '%', font: { size: 10 } },
-        },
+        y: { min: 0, max: 100, ticks: { callback: v => v + '%', font: { size: 10 } } },
         x: { ticks: { font: { size: 10 } } },
       },
     },
   });
 }
 
-// Init charts
-loadTimeSeries('PM25', '7d');
+function loadAllCharts() {
+  loadChart('PM25', 'chart-pm25', 'pm25-pts', pm25GuidelineDatasets);
+  loadChart('PM10', 'chart-pm10', 'pm10-pts', null);
+  loadChart('PM1',  'chart-pm1',  'pm1-pts',  null);
+  loadChart('TEMP', 'chart-temp', 'temp-pts', null);
+  loadChart('RH',   'chart-rh',   'rh-pts',   null);
+  if (IS_INDOOR) {
+    loadChart('CO2',  'chart-co2',  'co2-pts',  co2GuidelineDatasets);
+    loadChart('TVOC', 'chart-tvoc', 'tvoc-pts', null);
+  }
+}
+
+function setWindow(w) {
+  currentWindow = w;
+  customStart = null;
+  customEnd   = null;
+  document.getElementById('custom-start').value = '';
+  document.getElementById('custom-end').value   = '';
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.window === w);
+  });
+  loadAllCharts();
+}
+
+function applyCustomRange() {
+  const s = document.getElementById('custom-start').value;
+  const e = document.getElementById('custom-end').value;
+  if (!s || !e) return;
+  customStart = s;
+  customEnd   = e;
+  document.querySelectorAll('.range-btn').forEach(btn => btn.classList.remove('active'));
+  loadAllCharts();
+}
+
+// Init
+loadAllCharts();
 loadCompleteness();
 
-// Wire up controls
-document.getElementById('pollutant-select').addEventListener('change', e => {
-  loadTimeSeries(e.target.value, document.getElementById('time-range-select').value);
-});
-document.getElementById('time-range-select').addEventListener('change', e => {
-  loadTimeSeries(document.getElementById('pollutant-select').value, e.target.value);
-});
+// ── Auto-refresh when viewing the 1-day window ───────────────────────────
+const AUTO_REFRESH_SEC = 30;
+let _refreshTimer = null;
+
+function _startAutoRefresh() {
+  if (_refreshTimer) return;
+  document.getElementById('live-badge').classList.remove('hidden');
+  _refreshTimer = setInterval(() => {
+    loadAllCharts();
+    loadCompleteness();
+  }, AUTO_REFRESH_SEC * 1000);
+}
+
+function _stopAutoRefresh() {
+  if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+  document.getElementById('live-badge').classList.add('hidden');
+}
+
+const _origSetWindow = setWindow;
+setWindow = function(w) {
+  _origSetWindow(w);
+  if (w === '1d') _startAutoRefresh(); else _stopAutoRefresh();
+};
 </script>
 {% endblock %}

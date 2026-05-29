@@ -35,6 +35,15 @@ class APIKey(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="api_keys",
     )
+    # Optional: tie a SENSOR key to a specific sensor so serial_number is
+    # inferred from the key rather than the payload.
+    sensor = models.ForeignKey(
+        "sensors.Sensor",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="api_keys",
+        help_text="If set, this key may only POST readings for this sensor.",
+    )
     name = models.CharField(max_length=100, help_text="Human-readable label, e.g. 'Belauri Outdoor Sensor'")
     prefix = models.CharField(max_length=KEY_PREFIX_LENGTH, db_index=True, help_text="First 8 chars of key (plain text, for lookup)")
     hashed_key = models.CharField(max_length=256, help_text="PBKDF2-SHA256 hash of the full key")
