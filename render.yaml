@@ -56,7 +56,7 @@ services:
   - type: cron
     name: nepal-aq-process-uploads
     runtime: python
-    plan: free
+    plan: starter
     schedule: "* * * * *"
 
     buildCommand: |
@@ -98,7 +98,7 @@ services:
   - type: cron
     name: nepal-aq-aggregate
     runtime: python
-    plan: free
+    plan: starter
     schedule: "*/10 * * * *"
 
     buildCommand: |
@@ -132,7 +132,7 @@ services:
   - type: cron
     name: nepal-aq-archive
     runtime: python
-    plan: free
+    plan: starter
     schedule: "0 2 * * *"
 
     buildCommand: |
@@ -176,7 +176,7 @@ services:
   - type: cron
     name: nepal-aq-backup
     runtime: python
-    plan: free
+    plan: starter
     schedule: "30 2 * * *"
 
     buildCommand: |

@@ -123,10 +123,14 @@ if [[ -n "$EXISTING" ]]; then
         -H "Authorization: Bearer ${RENDER_API_KEY}" \
         -H "Content-Type: application/json" \
         -d '{"clearCache": false}' \
-        "https://api.render.com/v1/services/${EXISTING}/deploys")"
+        "https://api.render.com/v1/services/${EXISTING}/deploys")" || true
 
-    DEPLOY_ID="$(echo "$DEPLOY_RESP" | jq -r '.id')"
-    success "Re-deploy triggered (deploy id: ${DEPLOY_ID})."
+    DEPLOY_ID="$(echo "$DEPLOY_RESP" | jq -r '.id // empty')"
+    if [[ -n "$DEPLOY_ID" ]]; then
+        success "Re-deploy triggered (deploy id: ${DEPLOY_ID})."
+    else
+        warn "Failed to trigger re-deploy. Check Render dashboard."
+    fi
 else
     # ── 5. Create blueprint from render.yaml via GitHub URL ──────────────────────
     info "Creating Render Blueprint from render.yaml..."
