@@ -38,6 +38,44 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.0"
 
+  - type: cron
+    name: nepal-aq-ingestion-worker
+    runtime: python
+    plan: free
+    schedule: "* * * * *"   # every minute
+
+    buildCommand: |
+      cd Dashboard
+      pip install -r requirements.txt
+
+    startCommand: |
+      cd Dashboard
+      python manage.py process_ingestion_jobs --max-jobs 10
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: nepal_aq.settings.production
+
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          name: nepal-aq-dashboard
+          type: web
+          envVarKey: DJANGO_SECRET_KEY
+
+      - key: DJANGO_DEBUG
+        value: "False"
+
+      - key: DJANGO_ALLOWED_HOSTS
+        value: .onrender.com
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nepal-aq-db
+          property: connectionString
+
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
 databases:
   - name: nepal-aq-db
     plan: free

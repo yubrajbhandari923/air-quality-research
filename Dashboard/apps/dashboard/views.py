@@ -633,6 +633,39 @@ class AboutView(TemplateView):
 # PORTAL VIEWS  (login required, role-gated)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _save_upload_and_queue(uploaded_file, user, sensor=None):
+    """
+    Save an uploaded file to MEDIA_ROOT/uploads/pending/ and create a PENDING
+    IngestionJob row.  Returns the saved IngestionJob instance.
+
+    No CSV parsing happens here — the management command does that.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from apps.ingestion.models import IngestionJob
+
+    pending_dir = Path(settings.MEDIA_ROOT) / "uploads" / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+
+    # Unique filename prevents collisions between concurrent uploads.
+    suffix = Path(uploaded_file.name).suffix or ".csv"
+    saved_name = f"{uuid.uuid4().hex}{suffix}"
+    dest = pending_dir / saved_name
+
+    with dest.open("wb") as f:
+        for chunk in uploaded_file.chunks():
+            f.write(chunk)
+
+    return IngestionJob.objects.create(
+        uploaded_by=user,
+        original_filename=uploaded_file.name,
+        file_path=str(dest),
+        sensor=sensor,
+        status=IngestionJob.Status.PENDING,
+    )
+
+
 class PortalRequiredMixin(LoginRequiredMixin):
     login_url = "/sign-in/"
     allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
@@ -791,7 +824,7 @@ class SensorListPortalView(PortalRequiredMixin, TemplateView):
 class SensorUploadView(PortalRequiredMixin, View):
     """
     GET  /portal/sensors/<pk>/upload/ — upload form for a specific sensor
-    POST /portal/sensors/<pk>/upload/ — process the CSV, returns JSON
+    POST /portal/sensors/<pk>/upload/ — save file, queue IngestionJob, return JSON immediately
     """
 
     template_name = "portal/sensor_upload.html"
@@ -802,103 +835,64 @@ class SensorUploadView(PortalRequiredMixin, View):
         return render(request, self.template_name, {"sensor": sensor})
 
     def post(self, request, pk):
-        from apps.ingestion.converters.generic_csv_converter import GenericCSVConverter
-
         sensor = get_object_or_404(Sensor.objects.select_related("site"), pk=pk)
         uploaded = request.FILES.get("file")
 
         if not uploaded:
             return JsonResponse({"status": "FAILED", "error": "No file selected."}, status=400)
 
-        if uploaded.size > 100 * 1024 * 1024:
-            return JsonResponse({"status": "FAILED", "error": "File exceeds 100 MB limit."}, status=400)
+        if uploaded.size > 200 * 1024 * 1024:
+            return JsonResponse({"status": "FAILED", "error": "File exceeds 200 MB limit."}, status=400)
 
-        converter = GenericCSVConverter()
-        result = converter.run(
-            source=uploaded,
-            triggered_by=request.user,
-            dataset_name=f"Upload: {sensor.serial_number} — {uploaded.name}",
-        )
-        result["filename"] = uploaded.name
-        result["sensor_serial"] = sensor.serial_number
-
-        # Fire background aggregation for sensors that received new raw data
-        if result.get("saved", 0) > 0:
-            from apps.ingestion.tasks import aggregate_after_upload
-            dispatch = aggregate_after_upload(result.get("sensor_ids") or [sensor.pk])
-            result["aggregation_dispatch"] = dispatch
-
-        return JsonResponse(result)
+        job = _save_upload_and_queue(uploaded, request.user, sensor=sensor)
+        return JsonResponse({
+            "status": "QUEUED",
+            "job_id": job.pk,
+            "filename": uploaded.name,
+            "sensor_serial": sensor.serial_number,
+            "message": f"File queued for import (job #{job.pk}). Poll /portal/jobs/{job.pk}/status/ for progress.",
+        })
 
 
 class UploadCSVView(PortalRequiredMixin, View):
     """
     GET  /portal/upload-csv/ — show upload form with format documentation
-    POST /portal/upload-csv/ — run GenericCSVConverter on the uploaded file
+    POST /portal/upload-csv/ — save file, queue an IngestionJob, redirect immediately
     """
 
     template_name = "portal/upload_csv.html"
     allowed_roles = ("RESEARCHER", "ADMIN", "MAINTAINER")
 
     def get(self, request):
+        from apps.ingestion.models import IngestionJob
         ctx = {
             "sensors": Sensor.objects.select_related("site").order_by("site__name", "serial_number"),
+            "recent_jobs": IngestionJob.objects.filter(uploaded_by=request.user).order_by("-created_at")[:10],
         }
         return render(request, self.template_name, ctx)
 
     def post(self, request):
         from django.contrib import messages
-        from apps.ingestion.converters.generic_csv_converter import GenericCSVConverter
+        from django.shortcuts import redirect
+        from apps.ingestion.models import IngestionJob
 
         uploaded = request.FILES.get("file")
         if not uploaded:
             messages.error(request, "No file selected.")
-            return render(request, self.template_name, {
-                "sensors": Sensor.objects.select_related("site").order_by("site__name"),
-            })
+            return redirect("portal:upload_csv")
 
-        max_mb = 100
+        max_mb = 200
         if uploaded.size > max_mb * 1024 * 1024:
             messages.error(request, f"File exceeds {max_mb} MB limit.")
-            return render(request, self.template_name, {
-                "sensors": Sensor.objects.select_related("site").order_by("site__name"),
-            })
+            return redirect("portal:upload_csv")
 
-        converter = GenericCSVConverter()
-        result = converter.run(
-            source=uploaded,
-            triggered_by=request.user,
-            dataset_name=f"Portal upload: {uploaded.name}",
+        job = _save_upload_and_queue(uploaded, request.user, sensor=None)
+        messages.success(
+            request,
+            f"'{uploaded.name}' queued for import (job #{job.pk}). "
+            "Check back in a minute — the page will show the result when done."
         )
-
-        # Fire background aggregation so charts update without blocking the user
-        if result.get("saved", 0) > 0 and result.get("sensor_ids"):
-            from apps.ingestion.tasks import aggregate_after_upload
-            aggregate_after_upload(result["sensor_ids"])
-
-        ctx = {
-            "sensors": Sensor.objects.select_related("site").order_by("site__name", "serial_number"),
-            "result": result,
-            "filename": uploaded.name,
-        }
-
-        if result["status"] in ("SUCCESS", "PARTIAL"):
-            messages.success(
-                request,
-                f"Ingested {result['saved']:,} readings "
-                f"({result['duplicates']:,} duplicates skipped). "
-                f"Hourly/daily aggregation is running in the background."
-            )
-            if result.get("skipped_serials"):
-                messages.warning(
-                    request,
-                    "Unknown sensor serials (not registered) were skipped: "
-                    + ", ".join(result["skipped_serials"]),
-                )
-        else:
-            messages.error(request, f"Ingestion failed: {result.get('error', 'Unknown error')}")
-
-        return render(request, self.template_name, ctx)
+        return redirect("portal:upload_csv")
 
 
 class APIKeysView(PortalRequiredMixin, View):
@@ -1046,3 +1040,23 @@ class RunAnalysisScriptView(PortalRequiredMixin, View):
             })
         except Exception as e:
             return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+
+class IngestionJobStatusView(PortalRequiredMixin, View):
+    """GET /portal/jobs/<pk>/status/ — JSON polling endpoint for upload job progress."""
+
+    allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
+
+    def get(self, request, pk):
+        from apps.ingestion.models import IngestionJob
+        job = get_object_or_404(IngestionJob, pk=pk, uploaded_by=request.user)
+        return JsonResponse({
+            "job_id":   job.pk,
+            "status":   job.status,
+            "filename": job.original_filename,
+            "saved":      job.records_saved,
+            "duplicates": job.records_duplicate,
+            "errors":     job.records_error,
+            "error_detail": job.error_detail,
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        })
