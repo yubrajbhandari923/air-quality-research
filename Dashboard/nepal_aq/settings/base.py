@@ -38,8 +38,6 @@ INSTALLED_APPS = [
     "rest_framework.authtoken",
     "django_filters",
     "corsheaders",
-    "django_celery_beat",
-    "django_celery_results",
     "axes",
     # Local apps
     "apps.core",
@@ -176,38 +174,22 @@ REST_FRAMEWORK = {
     },
 }
 
-# ── Celery ────────────────────────────────────────────────────────────────────
-CELERY_BROKER_URL = env("CELERY_BROKER_URL", default="redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="redis://localhost:6379/1")
-CELERY_ACCEPT_CONTENT = ["json"]
-CELERY_TASK_SERIALIZER = "json"
-CELERY_RESULT_SERIALIZER = "json"
-CELERY_TIMEZONE = "Asia/Kathmandu"
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
-
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# In production set CORS_ALLOWED_ORIGINS to your Render URL, e.g.:
+#   CORS_ALLOWED_ORIGINS=https://nepal-aq-dashboard.onrender.com
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:8000",
-]
-
-# ── Data Paths ────────────────────────────────────────────────────────────────
-BELAURI_DATA_DIR = env(
-    "BELAURI_DATA_DIR",
-    default=str(Path(__file__).resolve().parent.parent.parent.parent / "Data" / "Belauri"),
-)
-OPENAQ_DATA_DIR = env(
-    "OPENAQ_DATA_DIR",
-    default=str(Path(__file__).resolve().parent.parent.parent.parent / "Data" / "open-aq"),
+CORS_ALLOWED_ORIGINS = env.list(
+    "CORS_ALLOWED_ORIGINS",
+    default=["http://localhost:3000", "http://localhost:8000"],
 )
 
-# Raw Parquet archive — set to an absolute path to enable file-based raw storage.
-# Structure: RAW_DATA_DIR/sensor_{serial}/{YYYY}/{YYYY-MM-DD}.parquet
-# Requires: pip install pyarrow
-# Leave empty to disable (all raw data stays in the database only).
-RAW_DATA_DIR = env("RAW_DATA_DIR", default="")
+# ── Cloudflare R2 (S3-compatible archive + CSV upload storage) ────────────────
+# Required in production. Leave blank to disable R2 (uploads/archiving skipped).
+R2_ACCOUNT_ID        = env("R2_ACCOUNT_ID",        default="")
+R2_ACCESS_KEY_ID     = env("R2_ACCESS_KEY_ID",     default="")
+R2_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY", default="")
+R2_BUCKET_NAME       = env("R2_BUCKET_NAME",       default="nepal-aq")
 
-# DuckDB file for raw minute-level sensor readings (replaces CanonicalReading bulk inserts).
-# Defaults to <BASE_DIR>/raw_data/readings.duckdb — override via RAW_DUCKDB_PATH env var.
-RAW_DUCKDB_PATH = env("RAW_DUCKDB_PATH", default=str(BASE_DIR / "raw_data" / "readings.duckdb"))
+# ── Archive settings ──────────────────────────────────────────────────────────
+# Raw readings older than this many days are archived to R2 and deleted from Postgres.
+ARCHIVE_AFTER_DAYS = env.int("ARCHIVE_AFTER_DAYS", default=90)

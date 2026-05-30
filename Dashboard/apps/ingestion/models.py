@@ -38,6 +38,10 @@ class IngestionJob(TimeStampedModel):
         related_name="ingestion_jobs",
         help_text="Pre-selected sensor (SensorUploadView). Null for the generic upload view.",
     )
+    r2_key = models.CharField(
+        max_length=500, blank=True,
+        help_text="R2 object key for the uploaded CSV (e.g. uploads/42/data.csv).",
+    )
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True)
     started_at  = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)

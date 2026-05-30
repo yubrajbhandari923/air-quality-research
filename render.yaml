@@ -1,4 +1,5 @@
 services:
+  # ── Web service ─────────────────────────────────────────────────────────────
   - type: web
     name: nepal-aq-dashboard
     runtime: python
@@ -11,7 +12,6 @@ services:
       python manage.py migrate --noinput
       python manage.py shell -c "import os; from django.contrib.auth import get_user_model; User=get_user_model(); username=os.environ.get('DJANGO_SUPERUSER_USERNAME'); email=os.environ.get('DJANGO_SUPERUSER_EMAIL'); password=os.environ.get('DJANGO_SUPERUSER_PASSWORD'); User.objects.filter(username=username).exists() or User.objects.create_superuser(username=username, email=email, password=password)"
       if [ "$RESET_DATA" = "true" ]; then python manage.py clear_data --yes; fi
-      python manage.py load_real_data
 
     startCommand: |
       cd Dashboard
@@ -20,29 +20,44 @@ services:
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: nepal_aq.settings.production
-
       - key: DJANGO_SECRET_KEY
         generateValue: true
-
       - key: DJANGO_DEBUG
         value: "False"
-
       - key: DJANGO_ALLOWED_HOSTS
         value: .onrender.com
-
       - key: DATABASE_URL
         fromDatabase:
           name: nepal-aq-db
           property: connectionString
-
       - key: PYTHON_VERSION
         value: "3.12.0"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: nepal-aq
+      - key: ARCHIVE_AFTER_DAYS
+        value: "90"
+      # Set these manually in the Render dashboard — never commit real passwords
+      - key: DJANGO_SUPERUSER_USERNAME
+        sync: false
+      - key: DJANGO_SUPERUSER_EMAIL
+        sync: false
+      - key: DJANGO_SUPERUSER_PASSWORD
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
 
+  # ── Cron 1: process queued CSV uploads (every minute) ──────────────────────
   - type: cron
-    name: nepal-aq-ingestion-worker
+    name: nepal-aq-process-uploads
     runtime: python
     plan: free
-    schedule: "* * * * *"   # every minute
+    schedule: "* * * * *"
 
     buildCommand: |
       cd Dashboard
@@ -55,26 +70,149 @@ services:
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: nepal_aq.settings.production
-
       - key: DJANGO_SECRET_KEY
         fromService:
           name: nepal-aq-dashboard
           type: web
           envVarKey: DJANGO_SECRET_KEY
-
       - key: DJANGO_DEBUG
         value: "False"
-
       - key: DJANGO_ALLOWED_HOSTS
         value: .onrender.com
-
       - key: DATABASE_URL
         fromDatabase:
           name: nepal-aq-db
           property: connectionString
-
       - key: PYTHON_VERSION
         value: "3.12.0"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: nepal-aq
+
+  # ── Cron 2: aggregate raw readings (every 10 minutes) ──────────────────────
+  - type: cron
+    name: nepal-aq-aggregate
+    runtime: python
+    plan: free
+    schedule: "*/10 * * * *"
+
+    buildCommand: |
+      cd Dashboard
+      pip install -r requirements.txt
+
+    startCommand: |
+      cd Dashboard
+      python manage.py aggregate_readings
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: nepal_aq.settings.production
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          name: nepal-aq-dashboard
+          type: web
+          envVarKey: DJANGO_SECRET_KEY
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: .onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nepal-aq-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
+  # ── Cron 3: archive old raw rows to R2 (once per day at 02:00 UTC) ─────────
+  - type: cron
+    name: nepal-aq-archive
+    runtime: python
+    plan: free
+    schedule: "0 2 * * *"
+
+    buildCommand: |
+      cd Dashboard
+      pip install -r requirements.txt
+
+    startCommand: |
+      cd Dashboard
+      python manage.py archive_to_r2
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: nepal_aq.settings.production
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          name: nepal-aq-dashboard
+          type: web
+          envVarKey: DJANGO_SECRET_KEY
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: .onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nepal-aq-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: nepal-aq
+      - key: ARCHIVE_AFTER_DAYS
+        value: "90"
+
+  # ── Cron 4: daily Postgres backup to R2 (02:30 UTC, after archive) ──────────
+  - type: cron
+    name: nepal-aq-backup
+    runtime: python
+    plan: free
+    schedule: "30 2 * * *"
+
+    buildCommand: |
+      cd Dashboard
+      pip install -r requirements.txt
+
+    startCommand: |
+      cd Dashboard
+      python manage.py backup_db_to_r2
+
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: nepal_aq.settings.production
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          name: nepal-aq-dashboard
+          type: web
+          envVarKey: DJANGO_SECRET_KEY
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_ALLOWED_HOSTS
+        value: .onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nepal-aq-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: nepal-aq
 
 databases:
   - name: nepal-aq-db

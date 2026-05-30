@@ -15,8 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY . .
 
-# Create non-root user
-RUN useradd --create-home appuser && chown -R appuser:appuser /app
+# Create non-root user; pre-create /shared so Docker initialises the
+# dev_keys named volume with appuser ownership instead of root:root.
+RUN useradd --create-home appuser \
+    && chown -R appuser:appuser /app \
+    && mkdir -p /shared && chown appuser:appuser /shared
 USER appuser
 
 ENV PYTHONDONTWRITEBYTECODE=1

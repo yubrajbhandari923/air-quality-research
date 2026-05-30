@@ -1,8 +1,37 @@
 version: "3.9"
 
+# Full local dev stack — mirrors the production Render architecture:
+#
+#   db            → Postgres (same engine as prod)
+#   web           → Django runserver (auto-migrates, creates admin + sensors)
+#   worker        → process_ingestion_jobs loop (simulates Render Cron 1)
+#   aggregator    → aggregate_readings loop      (simulates Render Cron 2)
+#   emulator-*    → synthetic sensors sending live API readings
+#
+# Usage:
+#   docker compose up                 — start everything, tail all logs
+#   docker compose up -d              — start in background
+#   docker compose logs -f web        — follow web logs only
+#   docker compose logs -f emulator-outdoor
+#   docker compose down               — stop, keep data volume
+#   docker compose down -v            — stop + wipe DB (clean slate)
+#
+# Web:      http://localhost:8000        (admin / admin)
+# Admin:    http://localhost:8000/admin
+# API docs: http://localhost:8000/data/
+
+x-django-env: &django-env
+  DJANGO_SETTINGS_MODULE: nepal_aq.settings.development
+  DATABASE_URL: postgres://aq_user:aq_password@db:5432/nepal_aq_db
+  DJANGO_SECRET_KEY: dev-only-insecure-key-do-not-use-in-production
+  DJANGO_DEBUG: "True"
+  DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,web"
+
 services:
+
+  # ── Postgres ──────────────────────────────────────────────────────────────────
   db:
-    image: postgis/postgis:15-3.4
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: nepal_aq_db
       POSTGRES_USER: aq_user
@@ -13,75 +42,104 @@ services:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aq_user -d nepal_aq_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 5s
+      timeout: 3s
+      retries: 15
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+  # ── Django web server ─────────────────────────────────────────────────────────
   web:
     build: .
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py collectstatic --noinput &&
-             python manage.py runserver 0.0.0.0:8000"
+    entrypoint: ["/bin/bash", "/app/docker/web_entrypoint.sh"]
     volumes:
-      - .:/app
-      - /Users/yubraj/Code/air-quality-research/Data:/data:ro
-      - static_volume:/app/staticfiles
-      - media_volume:/app/mediafiles
+      - .:/app                          # live code reload
+      - dev_keys:/shared                # API keys shared with emulators
+      - media_files:/app/mediafiles     # uploaded CSVs (local dev path)
     ports:
       - "8000:8000"
-    env_file:
-      - .env.example
     environment:
-      - DJANGO_SETTINGS_MODULE=nepal_aq.settings.development
+      <<: *django-env
     depends_on:
       db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
-  celery:
+  # ── Ingestion worker (simulates Render Cron 1: process_ingestion_jobs) ─────────
+  worker:
     build: .
-    command: celery -A nepal_aq worker -l info -Q default,ingestion
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "[worker] Waiting for web..."
+        until python -c "
+        import urllib.request, sys
+        try: urllib.request.urlopen('http://web:8000/', timeout=3); sys.exit(0)
+        except: sys.exit(1)" 2>/dev/null; do sleep 5; done
+        echo "[worker] Starting process_ingestion_jobs loop (every 30s)..."
+        while true; do
+          python manage.py process_ingestion_jobs --max-jobs 10
+          sleep 30
+        done
     volumes:
       - .:/app
-      - /Users/yubraj/Code/air-quality-research/Data:/data:ro
-    env_file:
-      - .env.example
+      - media_files:/app/mediafiles
     environment:
-      - DJANGO_SETTINGS_MODULE=nepal_aq.settings.development
+      <<: *django-env
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - web
 
-  celery-beat:
+  # ── Aggregation worker (simulates Render Cron 2: aggregate_readings) ──────────
+  aggregator:
     build: .
-    command: celery -A nepal_aq beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "[aggregator] Waiting for web..."
+        until python -c "
+        import urllib.request, sys
+        try: urllib.request.urlopen('http://web:8000/', timeout=3); sys.exit(0)
+        except: sys.exit(1)" 2>/dev/null; do sleep 5; done
+        echo "[aggregator] Starting aggregate_readings loop (every 2 min)..."
+        while true; do
+          python manage.py aggregate_readings
+          sleep 120
+        done
     volumes:
       - .:/app
-    env_file:
-      - .env.example
     environment:
-      - DJANGO_SETTINGS_MODULE=nepal_aq.settings.development
+      <<: *django-env
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - web
+
+  # ── Outdoor sensor emulator ───────────────────────────────────────────────────
+  emulator-outdoor:
+    build: .
+    entrypoint: ["/bin/bash", "/app/docker/emulator_entrypoint.sh"]
+    volumes:
+      - .:/app
+      - dev_keys:/shared
+    environment:
+      <<: *django-env
+      SENSOR_TYPE: outdoor
+      INTERVAL: "10"           # send a reading every 10 seconds for fast local testing
+      BATCH_ON_START: "1"      # push 24h of historical data first, then go live
+    depends_on:
+      - web
+
+  # ── Indoor sensor emulator ────────────────────────────────────────────────────
+  emulator-indoor:
+    build: .
+    entrypoint: ["/bin/bash", "/app/docker/emulator_entrypoint.sh"]
+    volumes:
+      - .:/app
+      - dev_keys:/shared
+    environment:
+      <<: *django-env
+      SENSOR_TYPE: indoor
+      INTERVAL: "10"
+      BATCH_ON_START: "1"
+    depends_on:
+      - web
 
 volumes:
   postgres_data:
-  static_volume:
-  media_volume:
+  dev_keys:
+  media_files:

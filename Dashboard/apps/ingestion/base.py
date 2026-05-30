@@ -115,12 +115,11 @@ class BaseDataConverter(ABC):
 
     def save_to_canonical_schema(self, records: list[dict]) -> dict:
         """
-        Persist canonical records to the DuckDB raw data store.
+        Persist canonical records to the Postgres CanonicalReading table.
 
-        Raw minute-level data is stored in a DuckDB file (not the Django/SQLite
-        database) to avoid write-lock contention during large CSV uploads.
-        Hourly and daily aggregates are computed separately by the aggregation
-        task and stored in HourlyAggregate / DailyAggregate (Django DB).
+        Uses bulk_create with ignore_conflicts=True so duplicate
+        (sensor, pollutant, original_ts) rows are silently skipped.
+        The before/after count gives exact saved vs duplicate counts.
 
         Returns:
             {"saved": int, "duplicates": int, "errors": int}
@@ -129,15 +128,56 @@ class BaseDataConverter(ABC):
             return {"saved": 0, "duplicates": 0, "errors": 0}
 
         try:
-            from apps.ingestion.raw_store import raw_store
-            total_saved = total_dupes = 0
-            for i in range(0, len(records), 1000):
-                s, d = raw_store.append_batch(records[i:i + 1000])
-                total_saved += s
-                total_dupes += d
-            return {"saved": total_saved, "duplicates": total_dupes, "errors": 0}
+            from apps.readings.models import CanonicalReading
+
+            objs = [
+                CanonicalReading(
+                    sensor_id        = rec["sensor_id"],
+                    site_id          = rec.get("site_id"),
+                    original_ts      = rec["original_ts"],
+                    pollutant        = rec["pollutant"],
+                    unit             = rec.get("unit", ""),
+                    raw_value        = rec.get("raw_value"),
+                    cleaned_value    = rec.get("cleaned_value"),
+                    quality_flag     = rec.get("quality_flag", "UNVALIDATED"),
+                    flag_reason      = rec.get("flag_reason", ""),
+                    is_indoor        = bool(rec.get("is_indoor", False)),
+                    source_type      = rec.get("source_type", "CSV_UPLOAD"),
+                    dataset_id       = rec.get("dataset_id"),
+                    timezone         = rec.get("timezone", "Asia/Kathmandu"),
+                    interval_seconds = rec.get("interval_seconds"),
+                    is_duplicate     = False,
+                )
+                for rec in records
+            ]
+
+            # Count existing rows in this batch's time window before inserting,
+            # so we can report accurate saved vs duplicate counts.
+            sensor_ids = list({o.sensor_id for o in objs})
+            ts_list    = [o.original_ts for o in objs]
+            ts_min, ts_max = min(ts_list), max(ts_list)
+
+            before = CanonicalReading.objects.filter(
+                sensor_id__in=sensor_ids,
+                original_ts__range=(ts_min, ts_max),
+                is_duplicate=False,
+            ).count()
+
+            for i in range(0, len(objs), 1000):
+                CanonicalReading.objects.bulk_create(objs[i:i + 1000], ignore_conflicts=True)
+
+            after = CanonicalReading.objects.filter(
+                sensor_id__in=sensor_ids,
+                original_ts__range=(ts_min, ts_max),
+                is_duplicate=False,
+            ).count()
+
+            saved      = after - before
+            duplicates = len(records) - saved
+            return {"saved": saved, "duplicates": duplicates, "errors": 0}
+
         except Exception as exc:
-            logger.error("[%s] RawDataStore write failed: %s", self.source_name, exc)
+            logger.error("[%s] Postgres write failed: %s", self.source_name, exc)
             return {"saved": 0, "duplicates": 0, "errors": len(records)}
 
     def run(self, source: Any) -> dict:

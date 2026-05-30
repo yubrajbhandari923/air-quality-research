@@ -679,8 +679,6 @@ class TimeSeriesChartView(APIView):
         return self._fetch_raw(base_qs, pollutant, start_ts, end_ts)
 
     def _fetch_raw(self, base_qs, pollutant, start_ts, end_ts):
-        # For recent (≤2 day) windows, CanonicalReading holds live data and is fast.
-        # For historical data, fall through to DuckDB.
         qs = base_qs.order_by("original_ts")
         if start_ts:
             qs = qs.filter(original_ts__gte=start_ts)
@@ -699,23 +697,6 @@ class TimeSeriesChartView(APIView):
             timestamps = [r["original_ts"].isoformat() for r in rows]
             filtered = _filter_chart_outliers(values, pollutant)
             return [{"ts": ts, "value": v} for ts, v in zip(timestamps, filtered)]
-
-        # DuckDB fallback — historical data not in CanonicalReading
-        try:
-            from apps.ingestion.raw_store import raw_store
-            first = base_qs.values("sensor_id").first()
-            if first:
-                df = raw_store.query_range(
-                    sensor_id=first["sensor_id"], pollutant=pollutant,
-                    start=start_ts, end=end_ts, limit=5000,
-                )
-                if not df.empty:
-                    values = df["value"].tolist()
-                    timestamps = df["ts"].dt.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
-                    filtered = _filter_chart_outliers(values, pollutant)
-                    return [{"ts": ts, "value": v} for ts, v in zip(timestamps, filtered)]
-        except Exception as exc:
-            logger.warning("TimeSeriesChartView: DuckDB query failed: %s", exc)
 
         return []
 
@@ -768,7 +749,7 @@ class CompletenessChartView(APIView):
     GET /api/v1/charts/sensor/{id}/completeness/
 
     Returns daily completeness fractions for the last 30 days.
-    Source: DailyAggregate (falls back to DuckDB raw counts if no aggregates yet).
+    Source: DailyAggregate (falls back to CanonicalReading raw counts if not yet aggregated).
     """
 
     permission_classes = [AllowAny]
@@ -808,21 +789,29 @@ class CompletenessChartView(APIView):
                 for r in rows
             ]
         else:
-            # Fallback to DuckDB raw count if aggregates haven't been computed yet
+            # Fallback: count raw CanonicalReading rows by day if aggregates not yet computed.
+            from django.db.models import Count
+            from django.db.models.functions import TruncDate
             try:
-                from apps.ingestion.raw_store import raw_store
-                df = raw_store.count_by_day(sensor_id=sensor.pk, pollutant="PM25",
-                                            start=cutoff)
+                rows = (
+                    CanonicalReading.objects
+                    .filter(sensor=sensor, pollutant="PM25", is_duplicate=False,
+                            original_ts__gte=cutoff)
+                    .annotate(date=TruncDate("original_ts"))
+                    .values("date")
+                    .annotate(cnt=Count("id"))
+                    .order_by("date")
+                )
                 data = [
                     {
-                        "date": str(row["date"]),
+                        "date": str(r["date"]),
                         "expected": expected_per_day,
-                        "actual": int(row["cnt"]),
+                        "actual": r["cnt"],
                         "completeness_pct": round(
-                            min(100, int(row["cnt"]) / expected_per_day * 100), 1
+                            min(100, r["cnt"] / expected_per_day * 100), 1
                         ),
                     }
-                    for _, row in df.iterrows()
+                    for r in rows
                 ]
             except Exception:
                 data = []
@@ -916,7 +905,7 @@ class SensorDateRangeView(APIView):
     GET /api/v1/charts/sensor/{id}/date-range/?pollutant=PM25
 
     Returns min/max dates from DailyAggregate (falls back to CanonicalReading
-    for data loaded before the DuckDB migration).
+    if aggregates have not yet been computed for a sensor).
     """
     permission_classes = [AllowAny]
 
@@ -936,7 +925,6 @@ class SensorDateRangeView(APIView):
         min_date = agg["min_date"]
         max_date = agg["max_date"]
 
-        # Legacy fallback for pre-migration data still in CanonicalReading
         if not min_date:
             cr_agg = CanonicalReading.objects.filter(
                 sensor=sensor, pollutant=pollutant, is_duplicate=False,
@@ -1356,36 +1344,26 @@ class ExportReadingsView(APIView):
         pollutant values spread across columns.  Matches native sensor export format.
         """
         import pandas as pd
-        from apps.ingestion.raw_store import raw_store
 
-        # ── Fetch long-format data ─────────────────────────────────────────────
+        # ── Fetch long-format data from Postgres CanonicalReading ──────────────
+        qs = CanonicalReading.objects.filter(
+            sensor_id__in=sensor_ids, is_duplicate=False,
+        ).order_by("original_ts")
+        if pollutants:
+            qs = qs.filter(pollutant__in=pollutants)
+        if quality != "ALL":
+            qs = qs.filter(quality_flag=quality)
+        if start_ts:
+            qs = qs.filter(original_ts__gte=start_ts)
+        if end_ts:
+            qs = qs.filter(original_ts__lte=end_ts)
+        rows = list(qs[:max_rows].values(
+            "sensor_id", "original_ts", "pollutant", "raw_value", "is_indoor",
+        ))
         df_long = pd.DataFrame()
-        try:
-            df_long = raw_store.query_multi_sensor_export(
-                sensor_ids=sensor_ids, start=start_ts, end=end_ts,
-                pollutants=pollutants, quality_flags=quality_flags, limit=max_rows,
-            )
-        except Exception as exc:
-            logger.warning("ExportReadingsView: DuckDB failed (%s), trying CanonicalReading", exc)
-
-        if df_long.empty:
-            qs = CanonicalReading.objects.filter(
-                sensor_id__in=sensor_ids, is_duplicate=False,
-            ).order_by("original_ts")
-            if pollutants:
-                qs = qs.filter(pollutant__in=pollutants)
-            if quality != "ALL":
-                qs = qs.filter(quality_flag=quality)
-            if start_ts:
-                qs = qs.filter(original_ts__gte=start_ts)
-            if end_ts:
-                qs = qs.filter(original_ts__lte=end_ts)
-            rows = list(qs[:max_rows].values(
-                "sensor_id", "original_ts", "pollutant", "raw_value", "is_indoor",
-            ))
-            if rows:
-                df_long = pd.DataFrame(rows)
-                df_long = df_long.rename(columns={"original_ts": "ts", "raw_value": "value"})
+        if rows:
+            df_long = pd.DataFrame(rows)
+            df_long = df_long.rename(columns={"original_ts": "ts", "raw_value": "value"})
 
         if df_long.empty:
             return pd.DataFrame(columns=_WIDE_COLUMN_ORDER)

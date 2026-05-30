@@ -207,6 +207,34 @@ class CanonicalReading(TimeStampedModel):
         return mapping.get(self.quality_flag, "bg-gray-100")
 
 
+class TenMinAggregate(TimeStampedModel):
+    """
+    Pre-computed 10-minute statistics per sensor/pollutant.
+    window_start is always the floor of the 10-minute block (e.g. 14:20, 14:30).
+    """
+
+    sensor = models.ForeignKey(Sensor, on_delete=models.CASCADE, related_name="tenmin_aggregates")
+    site   = models.ForeignKey(Site,   on_delete=models.CASCADE, related_name="tenmin_aggregates")
+    window_start = models.DateTimeField(db_index=True, help_text="Start of the 10-minute window (UTC, tz-aware).")
+    pollutant    = models.CharField(max_length=10, choices=CanonicalReading.Pollutant.choices)
+    is_indoor    = models.BooleanField(default=False)
+
+    count     = models.PositiveIntegerField(default=0)
+    mean      = models.FloatField(null=True, blank=True)
+    min_value = models.FloatField(null=True, blank=True)
+    max_value = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-window_start"]
+        unique_together = [["sensor", "window_start", "pollutant"]]
+        indexes = [
+            models.Index(fields=["sensor", "pollutant", "window_start"]),
+        ]
+
+    def __str__(self):
+        return f"{self.window_start:%Y-%m-%d %H:%M} | {self.sensor} | {self.pollutant} | mean={self.mean}"
+
+
 class DailyAggregate(TimeStampedModel):
     """
     Pre-computed daily statistics per sensor/pollutant.

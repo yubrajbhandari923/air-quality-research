@@ -54,5 +54,3 @@ LOGGING = {
     },
 }
 
-# Celery: run tasks synchronously in dev (set to False for real async)
-CELERY_TASK_ALWAYS_EAGER = False

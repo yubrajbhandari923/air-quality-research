@@ -3,48 +3,34 @@ Django==4.2.16
 
 # REST Framework
 djangorestframework==3.15.2
-djangorestframework-simplejwt==5.3.1
 django-filter==24.3
 
 # Database
 psycopg2-binary==2.9.9
 django-environ==0.11.2
 
-# PostGIS / GIS
-# Uncomment if PostGIS is available in your environment:
-# django.contrib.gis (built into Django)
-# GDAL>=3.4.0
-
-# Celery / Redis
-celery==5.4.0
-redis==5.2.1
-django-celery-beat==2.7.0
-django-celery-results==2.5.1
-
 # Data Processing
 pandas==2.2.3
 numpy==2.1.3
 pytz==2024.2
-pyarrow>=16.0.0          # Parquet read/write for raw data archive
-duckdb==1.5.3             # In-memory SQL engine for data processing
+python-dateutil==2.9.0.post0
 
 # Image / Media
 Pillow==11.0.0
 
-# Utilities
-python-dateutil==2.9.0.post0
+# API utilities
 django-cors-headers==4.6.0
 whitenoise==6.8.2
+requests==2.32.3
 
 # Security
 django-axes==8.3.1
 
-# Dev / Testing
-factory-boy==3.3.1
-faker==33.1.0
-
 # Production server
 gunicorn==26.0.0
+boto3==1.35.0
 
-# Code quality
+# Dev / Testing (also installed in prod via render — acceptable for this project size)
+factory-boy==3.3.1
+faker==33.1.0
 flake8==7.1.1

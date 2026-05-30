@@ -635,35 +635,57 @@ class AboutView(TemplateView):
 
 def _save_upload_and_queue(uploaded_file, user, sensor=None):
     """
-    Save an uploaded file to MEDIA_ROOT/uploads/pending/ and create a PENDING
-    IngestionJob row.  Returns the saved IngestionJob instance.
+    Save an uploaded CSV and create a PENDING IngestionJob.
 
-    No CSV parsing happens here — the management command does that.
+    Production (R2_ACCOUNT_ID is set):
+        File is uploaded to Cloudflare R2 → job.r2_key is set.
+
+    Local dev (R2_ACCOUNT_ID is empty):
+        File is saved to MEDIA_ROOT/uploads/pending/ → job.file_path is set.
+        process_ingestion_jobs reads it directly from disk.
     """
     import uuid
-    from pathlib import Path
     from django.conf import settings
     from apps.ingestion.models import IngestionJob
 
-    pending_dir = Path(settings.MEDIA_ROOT) / "uploads" / "pending"
-    pending_dir.mkdir(parents=True, exist_ok=True)
-
-    # Unique filename prevents collisions between concurrent uploads.
-    suffix = Path(uploaded_file.name).suffix or ".csv"
-    saved_name = f"{uuid.uuid4().hex}{suffix}"
-    dest = pending_dir / saved_name
-
-    with dest.open("wb") as f:
-        for chunk in uploaded_file.chunks():
-            f.write(chunk)
-
-    return IngestionJob.objects.create(
+    job = IngestionJob.objects.create(
         uploaded_by=user,
         original_filename=uploaded_file.name,
-        file_path=str(dest),
+        file_path="",
         sensor=sensor,
         status=IngestionJob.Status.PENDING,
     )
+
+    if getattr(settings, "R2_ACCOUNT_ID", ""):
+        # ── Production path: upload to R2 ─────────────────────────────────────
+        suffix = "".join(c for c in (uploaded_file.name or "upload.csv")[-50:] if c.isalnum() or c in "._-")
+        r2_key = f"uploads/{job.pk}/{suffix or 'upload.csv'}"
+        try:
+            from apps.ingestion import r2
+            uploaded_file.seek(0)
+            r2.upload_fileobj(uploaded_file, r2_key, content_type="text/csv")
+            job.r2_key = r2_key
+            job.save(update_fields=["r2_key"])
+        except Exception as exc:
+            logger.error("R2 upload failed for job %d: %s", job.pk, exc)
+            job.status       = IngestionJob.Status.FAILED
+            job.error_detail = f"R2 upload failed: {exc}"
+            job.save(update_fields=["status", "error_detail"])
+    else:
+        # ── Local dev path: save to disk ──────────────────────────────────────
+        from pathlib import Path
+        pending_dir = Path(settings.MEDIA_ROOT) / "uploads" / "pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+        suffix = Path(uploaded_file.name).suffix or ".csv"
+        dest   = pending_dir / f"{uuid.uuid4().hex}{suffix}"
+        uploaded_file.seek(0)
+        with dest.open("wb") as f:
+            for chunk in uploaded_file.chunks():
+                f.write(chunk)
+        job.file_path = str(dest)
+        job.save(update_fields=["file_path"])
+
+    return job
 
 
 class PortalRequiredMixin(LoginRequiredMixin):
@@ -970,11 +992,10 @@ class AggregationView(PortalRequiredMixin, View):
 
     def post(self, request):
         from django.contrib import messages
-        from apps.ingestion.tasks import compute_aggregates, write_parquet
+        from apps.ingestion.tasks import compute_aggregates
 
         sensor_id = request.POST.get("sensor_id") or None
         since_str = request.POST.get("since") or None
-        do_parquet = request.POST.get("write_parquet") == "1"
 
         since = None
         if since_str:
@@ -992,27 +1013,16 @@ class AggregationView(PortalRequiredMixin, View):
             since=since,
         )
 
-        parquet_result = None
-        if do_parquet:
-            from apps.sensors.models import Sensor as _Sensor
-            target_sensors = [_Sensor.objects.get(pk=sensor_id)] if sensor_id else list(_Sensor.objects.all())
-            rows_written = 0
-            for s in target_sensors:
-                pr = write_parquet(s.pk)
-                rows_written += pr.get("rows_written", 0)
-            parquet_result = {"rows_written": rows_written}
-
         messages.success(
             request,
-            f"Aggregation complete — {result['hourly_rows']:,} hourly rows, "
-            f"{result['daily_rows']:,} daily rows updated across "
-            f"{result['sensors_processed']} sensor(s)."
+            f"Aggregation complete — {result['tenmin_rows']:,} 10-min, "
+            f"{result['hourly_rows']:,} hourly, {result['daily_rows']:,} daily rows updated "
+            f"across {result['sensors_processed']} sensor(s)."
         )
 
         ctx = {
             "sensors": Sensor.objects.select_related("site").order_by("site__name"),
             "result": result,
-            "parquet_result": parquet_result,
         }
         return render(request, self.template_name, ctx)
 

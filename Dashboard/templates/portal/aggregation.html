@@ -8,7 +8,7 @@
     <a href="{% url 'portal:index' %}" class="text-sm text-slate-500 hover:text-slate-700">← Portal</a>
     <h1 class="mt-1 text-2xl font-bold text-slate-900">Aggregate Readings</h1>
     <p class="mt-1 text-sm text-slate-500">
-      Recomputes hourly and daily summary statistics from raw readings.
+      Recomputes 10-minute, hourly, and daily summary statistics from raw readings.
       Run this after any large CSV upload or to refresh charts with recent live data.
     </p>
   </div>
@@ -29,15 +29,11 @@
     <h3 class="font-semibold text-sm text-green-800 mb-3">Aggregation results</h3>
     <dl class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
       <div><dt class="text-xs text-slate-500">Sensors processed</dt><dd class="font-semibold text-slate-800">{{ result.sensors_processed }}</dd></div>
+      <div><dt class="text-xs text-slate-500">10-min rows</dt><dd class="font-semibold text-slate-800">{{ result.tenmin_rows }}</dd></div>
       <div><dt class="text-xs text-slate-500">Hourly rows</dt><dd class="font-semibold text-slate-800">{{ result.hourly_rows }}</dd></div>
       <div><dt class="text-xs text-slate-500">Daily rows</dt><dd class="font-semibold text-slate-800">{{ result.daily_rows }}</dd></div>
       <div><dt class="text-xs text-slate-500">Errors</dt><dd class="font-semibold {% if result.errors %}text-red-600{% else %}text-slate-400{% endif %}">{{ result.errors }}</dd></div>
     </dl>
-    {% if parquet_result %}
-    <p class="mt-3 text-xs text-green-700">
-      Parquet export: {{ parquet_result.rows_written|default:0 }} rows written to disk.
-    </p>
-    {% endif %}
   </div>
   {% endif %}
 
@@ -63,15 +59,6 @@
         <p class="mt-1 text-xs text-slate-400">Leave blank to recompute from the earliest reading. For large datasets, set a recent date to keep it fast.</p>
       </div>
 
-      <div class="flex items-center gap-2">
-        <input type="checkbox" name="write_parquet" id="write_parquet" value="1"
-               class="rounded border-slate-300 text-nao-blue focus:ring-nao-blue">
-        <label for="write_parquet" class="text-sm text-slate-700">
-          Also export raw readings to Parquet files
-          <span class="text-xs text-slate-400">(requires RAW_DATA_DIR in settings)</span>
-        </label>
-      </div>
-
       <div class="pt-2">
         <button type="submit"
                 class="px-5 py-2.5 rounded-lg bg-nao-blue text-white text-sm font-semibold hover:bg-blue-700 transition-colors">
@@ -86,10 +73,10 @@
     <h3 class="font-semibold text-slate-800 mb-2">About aggregation</h3>
     <ul class="list-disc list-inside space-y-1 text-xs text-slate-600">
       <li>Reads from <code>CanonicalReading</code> (GOOD and UNVALIDATED quality only).</li>
-      <li>Writes <code>HourlyAggregate</code> (one row per sensor × hour × pollutant) and <code>DailyAggregate</code>.</li>
+      <li>Writes <code>TenMinAggregate</code>, <code>HourlyAggregate</code>, and <code>DailyAggregate</code> — one row per sensor × window × pollutant.</li>
       <li>Uses <code>update_or_create</code> — safe to re-run multiple times.</li>
       <li>Charts on the sensor detail and analysis pages read from these aggregate tables.</li>
-      <li>Schedule this via the Django admin → <em>Periodic tasks</em> (django-celery-beat).</li>
+      <li>On Render, aggregation runs automatically every 10 minutes via the <code>nepal-aq-aggregate</code> Cron Job.</li>
       <li>API: <code>POST /api/v1/aggregate/</code> with a MAINTAINER/ADMIN key triggers the same computation.</li>
     </ul>
   </div>
