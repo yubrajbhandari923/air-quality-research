@@ -18,6 +18,7 @@ COPY . .
 # Create non-root user; pre-create /shared so Docker initialises the
 # dev_keys named volume with appuser ownership instead of root:root.
 RUN useradd --create-home appuser \
+    && mkdir -p /app/mediafiles \
     && chown -R appuser:appuser /app \
     && mkdir -p /shared && chown appuser:appuser /shared
 USER appuser

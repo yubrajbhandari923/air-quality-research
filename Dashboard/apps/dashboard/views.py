@@ -671,6 +671,18 @@ def _save_upload_and_queue(uploaded_file, user, sensor=None):
             job.status       = IngestionJob.Status.FAILED
             job.error_detail = f"R2 upload failed: {exc}"
             job.save(update_fields=["status", "error_detail"])
+    elif not settings.DEBUG:
+        # Production without R2: the cron job runs in a separate container and
+        # cannot read files from the web service's ephemeral disk.  Fail now
+        # with a clear message rather than queueing a job that will never work.
+        logger.error("Job %d: R2_ACCOUNT_ID is not set in production.", job.pk)
+        job.status       = IngestionJob.Status.FAILED
+        job.error_detail = (
+            "R2 storage is not configured (R2_ACCOUNT_ID is empty). "
+            "Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY "
+            "in the Render dashboard to enable CSV uploads."
+        )
+        job.save(update_fields=["status", "error_detail"])
     else:
         # ── Local dev path: save to disk ──────────────────────────────────────
         from pathlib import Path
@@ -715,7 +727,25 @@ class IngestionLogsView(PortalRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["logs"] = IngestionLog.objects.select_related("dataset", "triggered_by").order_by("-created_at")[:100]
+        from apps.ingestion.models import IngestionJob
+
+        # CSV upload jobs (the queue that process_ingestion_jobs drains)
+        job_status = self.request.GET.get("status", "")
+        jobs_qs = IngestionJob.objects.select_related("uploaded_by", "sensor__site").order_by("-created_at")
+        if job_status:
+            jobs_qs = jobs_qs.filter(status=job_status)
+        ctx["jobs"] = jobs_qs[:50]
+        ctx["job_status_filter"] = job_status
+        ctx["job_status_choices"] = IngestionJob.Status.choices
+
+        # IngestionLog — one row per converter run; exclude live-API noise by default
+        show_api = self.request.GET.get("show_api", "") == "1"
+        logs_qs = IngestionLog.objects.select_related("dataset", "triggered_by").order_by("-created_at")
+        if not show_api:
+            logs_qs = logs_qs.exclude(source_name="APIConverter")
+        ctx["logs"] = logs_qs[:100]
+        ctx["show_api_logs"] = show_api
+
         return ctx
 
 
@@ -866,7 +896,13 @@ class SensorUploadView(PortalRequiredMixin, View):
         if uploaded.size > 200 * 1024 * 1024:
             return JsonResponse({"status": "FAILED", "error": "File exceeds 200 MB limit."}, status=400)
 
+        from apps.ingestion.models import IngestionJob
         job = _save_upload_and_queue(uploaded, request.user, sensor=sensor)
+        if job.status == IngestionJob.Status.FAILED:
+            return JsonResponse(
+                {"status": "FAILED", "job_id": job.pk, "error": job.error_detail},
+                status=500,
+            )
         return JsonResponse({
             "status": "QUEUED",
             "job_id": job.pk,
@@ -909,11 +945,14 @@ class UploadCSVView(PortalRequiredMixin, View):
             return redirect("portal:upload_csv")
 
         job = _save_upload_and_queue(uploaded, request.user, sensor=None)
-        messages.success(
-            request,
-            f"'{uploaded.name}' queued for import (job #{job.pk}). "
-            "Check back in a minute — the page will show the result when done."
-        )
+        if job.status == IngestionJob.Status.FAILED:
+            messages.error(request, f"Upload failed: {job.error_detail}")
+        else:
+            messages.success(
+                request,
+                f"'{uploaded.name}' queued for import (job #{job.pk}). "
+                "Check back in a minute — the page will show the result when done."
+            )
         return redirect("portal:upload_csv")
 
 
@@ -1070,3 +1109,49 @@ class IngestionJobStatusView(PortalRequiredMixin, View):
             "error_detail": job.error_detail,
             "finished_at": job.finished_at.isoformat() if job.finished_at else None,
         })
+
+
+class CancelJobView(PortalRequiredMixin, View):
+    """POST /portal/jobs/<pk>/cancel/ — cancel a PENDING or PROCESSING job."""
+
+    allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
+
+    def post(self, request, pk):
+        from apps.ingestion.models import IngestionJob
+        from django.shortcuts import redirect
+
+        job = get_object_or_404(IngestionJob, pk=pk)
+        if job.status in (IngestionJob.Status.PENDING, IngestionJob.Status.PROCESSING):
+            job.status       = IngestionJob.Status.FAILED
+            job.error_detail = f"Cancelled by {request.user.username} at {timezone.now():%Y-%m-%d %H:%M:%S} UTC"
+            job.finished_at  = timezone.now()
+            job.save(update_fields=["status", "error_detail", "finished_at"])
+        return redirect(request.META.get("HTTP_REFERER", "portal:ingestion_logs"))
+
+
+class RetryJobView(PortalRequiredMixin, View):
+    """POST /portal/jobs/<pk>/retry/ — re-queue a failed/partial/stalled job."""
+
+    allowed_roles = ("RESEARCHER", "MAINTAINER", "ADMIN")
+
+    def post(self, request, pk):
+        from apps.ingestion.models import IngestionJob
+        from django.shortcuts import redirect
+
+        job = get_object_or_404(IngestionJob, pk=pk)
+        if job.status in (IngestionJob.Status.FAILED, IngestionJob.Status.PARTIAL,
+                          IngestionJob.Status.PROCESSING):
+            # PROCESSING retry: only safe once you're sure the worker is no longer
+            # running (e.g. the cron finished its cycle), otherwise cancel first.
+            job.status            = IngestionJob.Status.PENDING
+            job.error_detail      = ""
+            job.started_at        = None
+            job.finished_at       = None
+            job.records_saved     = 0
+            job.records_duplicate = 0
+            job.records_error     = 0
+            job.save(update_fields=[
+                "status", "error_detail", "started_at", "finished_at",
+                "records_saved", "records_duplicate", "records_error",
+            ])
+        return redirect(request.META.get("HTTP_REFERER", "portal:ingestion_logs"))

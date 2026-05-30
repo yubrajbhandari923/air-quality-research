@@ -96,6 +96,77 @@
   </div>
   {% endif %}
 
+  {# ── Recent upload jobs ──────────────────────────────────────────── #}
+  {% if recent_jobs %}
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-8">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-base font-semibold text-slate-800">Recent uploads</h2>
+      <a href="{% url 'portal:ingestion_logs' %}" class="text-xs text-nao-blue hover:underline">View all →</a>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-slate-50">
+          <tr>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">File</th>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Queued</th>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Status</th>
+            <th class="text-right px-3 py-2 text-slate-500 font-semibold">Saved</th>
+            <th class="text-right px-3 py-2 text-slate-500 font-semibold">Dupes</th>
+            <th class="text-right px-3 py-2 text-slate-500 font-semibold">Errors</th>
+            <th class="text-left px-3 py-2 text-slate-500 font-semibold">Detail</th>
+            <th class="px-3 py-2 text-slate-500 font-semibold"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for job in recent_jobs %}
+          <tr class="hover:bg-slate-50" data-job-id="{{ job.pk }}" data-status="{{ job.status }}">
+            <td class="px-3 py-2 text-slate-700 max-w-[14rem] truncate font-mono" title="{{ job.original_filename }}">{{ job.original_filename }}</td>
+            <td class="px-3 py-2 text-slate-500">{{ job.created_at|date:"d M H:i" }}</td>
+            <td class="px-3 py-2" data-field="status">
+              {% if job.status == 'SUCCESS' %}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">Success</span>
+              {% elif job.status == 'PARTIAL' %}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Partial</span>
+              {% elif job.status == 'FAILED' %}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">Failed</span>
+              {% elif job.status == 'PROCESSING' %}<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700"><svg class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>Processing</span>
+              {% else %}<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700"><svg class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>Pending</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right {% if job.records_saved > 0 %}text-green-700 font-medium{% else %}text-slate-400{% endif %}" data-field="saved">{{ job.records_saved }}</td>
+            <td class="px-3 py-2 text-right text-slate-400" data-field="dupes">{{ job.records_duplicate }}</td>
+            <td class="px-3 py-2 text-right {% if job.records_error > 0 %}text-red-600 font-medium{% else %}text-slate-300{% endif %}" data-field="errors">{{ job.records_error }}</td>
+            <td class="px-3 py-2 text-slate-500 max-w-[16rem]" data-field="error">
+              {% if job.error_detail %}
+              <details>
+                <summary class="cursor-pointer text-red-600 hover:text-red-800 truncate max-w-[14rem]">{{ job.error_detail|truncatechars:55 }}</summary>
+                <pre class="mt-1 text-xs text-slate-600 whitespace-pre-wrap break-all">{{ job.error_detail }}</pre>
+              </details>
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 whitespace-nowrap">
+              {% if job.is_stalled %}<span class="text-amber-600 text-xs mr-1" title="Stalled >5 min">⚠</span>{% endif %}
+              {% if job.can_cancel %}
+              <form method="post" action="{% url 'portal:job_cancel' job.pk %}" class="inline">
+                {% csrf_token %}
+                <button type="submit" onclick="return confirm('Cancel job #{{ job.pk }}?')"
+                        class="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50">Cancel</button>
+              </form>
+              {% endif %}
+              {% if job.can_retry %}
+              <form method="post" action="{% url 'portal:job_retry' job.pk %}" class="inline ml-1">
+                {% csrf_token %}
+                <button type="submit"
+                        {% if job.status == 'PROCESSING' %}onclick="return confirm('Only retry if worker is no longer running. Continue?')"{% endif %}
+                        class="px-2 py-1 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50">Retry</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   {# ── Format reference ────────────────────────────────────────────── #}
   <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
     <h2 class="text-base font-semibold text-slate-800 mb-4">CSV format reference</h2>
@@ -193,4 +264,61 @@
   </div>
 
 </div>
+
+<script>
+(function () {
+  const INTERVAL = 3000;
+
+  function spinner() {
+    return `<svg class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>`;
+  }
+
+  function badge(status) {
+    const map = {
+      PENDING:    ['bg-yellow-100 text-yellow-700', spinner() + 'Pending'],
+      PROCESSING: ['bg-blue-100 text-blue-700',     spinner() + 'Processing'],
+      SUCCESS:    ['bg-green-100 text-green-700',   'Success'],
+      PARTIAL:    ['bg-amber-100 text-amber-700',   'Partial'],
+      FAILED:     ['bg-red-100 text-red-700',       'Failed'],
+    };
+    const [cls, label] = map[status] || ['bg-slate-100 text-slate-500', status];
+    return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${cls}">${label}</span>`;
+  }
+
+  function poll(row) {
+    fetch(`/portal/jobs/${row.dataset.jobId}/status/`)
+      .then(r => r.json())
+      .then(d => {
+        row.dataset.status = d.status;
+        row.querySelector('[data-field="status"]').innerHTML = badge(d.status);
+        row.querySelector('[data-field="saved"]').textContent = d.saved;
+        row.querySelector('[data-field="dupes"]').textContent = d.duplicates;
+        const errCount = row.querySelector('[data-field="errors"]');
+        errCount.textContent = d.errors;
+        errCount.className = `px-3 py-2 text-right ${d.errors > 0 ? 'text-red-600 font-medium' : 'text-slate-300'}`;
+        if (d.error_detail) {
+          row.querySelector('[data-field="error"]').innerHTML =
+            `<details><summary class="cursor-pointer text-red-600 hover:text-red-800 truncate max-w-[14rem]">${d.error_detail.slice(0,55)}…</summary>
+             <pre class="mt-1 text-xs text-slate-600 whitespace-pre-wrap break-all">${d.error_detail}</pre></details>`;
+        }
+      })
+      .catch(() => {});
+  }
+
+  function startPolling() {
+    const active = () => [...document.querySelectorAll('[data-job-id]')]
+      .filter(r => r.dataset.status === 'PENDING' || r.dataset.status === 'PROCESSING');
+    if (!active().length) return;
+    const id = setInterval(() => {
+      const rows = active();
+      if (!rows.length) { clearInterval(id); return; }
+      rows.forEach(poll);
+    }, INTERVAL);
+  }
+
+  document.addEventListener('DOMContentLoaded', startPolling);
+})();
+</script>
 {% endblock %}

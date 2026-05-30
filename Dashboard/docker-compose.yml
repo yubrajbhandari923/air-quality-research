@@ -71,8 +71,8 @@ services:
         echo "[worker] Waiting for web..."
         until python -c "
         import urllib.request, sys
-        try: urllib.request.urlopen('http://web:8000/', timeout=3); sys.exit(0)
-        except: sys.exit(1)" 2>/dev/null; do sleep 5; done
+        try: urllib.request.urlopen('http://web:8000/', timeout=3)
+        except Exception: sys.exit(1)" 2>/dev/null; do sleep 5; done
         echo "[worker] Starting process_ingestion_jobs loop (every 30s)..."
         while true; do
           python manage.py process_ingestion_jobs --max-jobs 10
@@ -95,8 +95,8 @@ services:
         echo "[aggregator] Waiting for web..."
         until python -c "
         import urllib.request, sys
-        try: urllib.request.urlopen('http://web:8000/', timeout=3); sys.exit(0)
-        except: sys.exit(1)" 2>/dev/null; do sleep 5; done
+        try: urllib.request.urlopen('http://web:8000/', timeout=3)
+        except Exception: sys.exit(1)" 2>/dev/null; do sleep 5; done
         echo "[aggregator] Starting aggregate_readings loop (every 2 min)..."
         while true; do
           python manage.py aggregate_readings

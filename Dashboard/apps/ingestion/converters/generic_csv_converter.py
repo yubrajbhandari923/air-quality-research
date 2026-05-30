@@ -210,6 +210,15 @@ class GenericCSVConverter(BaseDataConverter):
 
         # Only use columns that exist in this CSV and are in the column map
         value_cols = [c for c in col_map if c in df.columns]
+        if not value_cols:
+            detected = list(df.columns[:20])
+            fmt = "telemetry" if is_telemetry else "export"
+            logger.error(
+                "GenericCSVConverter: no recognized pollutant columns in %s-format CSV. "
+                "Expected one of %s. Detected columns: %s",
+                fmt, list(col_map.keys()), detected,
+            )
+            return []
 
         id_cols = ["original_ts", "_serial"]
         melted = df[id_cols + value_cols].melt(
@@ -322,6 +331,28 @@ class GenericCSVConverter(BaseDataConverter):
                 total_saved  += result["saved"]
                 total_dupes  += result["duplicates"]
                 total_errors += result["errors"]
+
+            if total_attempted == 0 and not self._skipped_serials:
+                # CSV parsed OK but produced zero records — no serial mismatches either,
+                # so the columns simply weren't recognised.  Fail with a clear message.
+                IngestionLog.objects.create(
+                    source_name=self.source_name,
+                    source_file=source_label,
+                    dataset=dataset,
+                    status=IngestionLog.Status.FAILED,
+                    records_error=1,
+                    error_detail="No data rows produced. CSV columns did not match any recognised format.",
+                    triggered_by=triggered_by,
+                )
+                return {
+                    "saved": 0, "duplicates": 0, "errors": 1, "status": "FAILED",
+                    "error": (
+                        "No data rows were produced. "
+                        "Check that the CSV uses a recognised column format "
+                        "(see the upload page for supported column names) "
+                        "and that the file is not empty."
+                    ),
+                }
 
             if total_attempted == 0 and self._skipped_serials:
                 dataset.notes = "No records matched registered sensors."

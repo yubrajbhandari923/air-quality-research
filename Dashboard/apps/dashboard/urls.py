@@ -36,4 +36,6 @@ portal_patterns = [
     path("sensors/<int:pk>/upload/",      views.SensorUploadView.as_view(),             name="sensor_upload"),
     path("analysis/run/<int:pk>/",        views.RunAnalysisScriptView.as_view(),        name="run_analysis"),
     path("jobs/<int:pk>/status/",         views.IngestionJobStatusView.as_view(),       name="job_status"),
+    path("jobs/<int:pk>/cancel/",         views.CancelJobView.as_view(),               name="job_cancel"),
+    path("jobs/<int:pk>/retry/",          views.RetryJobView.as_view(),                name="job_retry"),
 ]

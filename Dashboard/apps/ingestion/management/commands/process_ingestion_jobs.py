@@ -60,6 +60,9 @@ class Command(BaseCommand):
         from apps.ingestion.converters.generic_csv_converter import GenericCSVConverter
         from apps.ingestion import r2
 
+        tmp_path = None
+        downloaded_from_r2 = False
+
         try:
             suffix = Path(job.original_filename).suffix or ".csv"
 
@@ -95,12 +98,20 @@ class Command(BaseCommand):
                 "PARTIAL": IngestionJob.Status.PARTIAL,
             }.get(str(result.get("status", "")), IngestionJob.Status.FAILED)
 
+            self.stdout.write(
+                f"Job {job.pk} → {job.status}: "
+                f"saved={job.records_saved} dupes={job.records_duplicate} "
+                f"errors={job.records_error}"
+                + (f" | {job.error_detail}" if job.error_detail else "")
+            )
+
             if result.get("saved", 0) > 0 and result.get("sensor_ids"):
                 from apps.ingestion.tasks import aggregate_after_upload
                 aggregate_after_upload(result["sensor_ids"])
 
         except Exception as exc:
             logger.exception("Job %d failed: %s", job.pk, exc)
+            self.stdout.write(self.style.ERROR(f"Job {job.pk} FAILED: {exc}"))
             job.status       = IngestionJob.Status.FAILED
             job.error_detail = str(exc)
             job.finished_at  = timezone.now()
@@ -110,9 +121,10 @@ class Command(BaseCommand):
                 "status", "started_at", "finished_at",
                 "records_saved", "records_duplicate", "records_error", "error_detail",
             ])
-            # In production: delete the temp download; R2 copy stays as permanent backup.
-            # In local dev: delete the pending file from disk after processing.
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            if tmp_path is not None:
+                if downloaded_from_r2:
+                    # Always clean up the temp R2 download; the R2 object stays.
+                    tmp_path.unlink(missing_ok=True)
+                elif job.status in (IngestionJob.Status.SUCCESS, IngestionJob.Status.PARTIAL):
+                    # Local dev: only delete after success so the file survives for retry.
+                    tmp_path.unlink(missing_ok=True)

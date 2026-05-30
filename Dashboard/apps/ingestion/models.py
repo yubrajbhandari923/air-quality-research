@@ -55,3 +55,19 @@ class IngestionJob(TimeStampedModel):
 
     def __str__(self):
         return f"{self.original_filename} — {self.get_status_display()} ({self.created_at:%Y-%m-%d %H:%M})"
+
+    @property
+    def is_stalled(self):
+        """True if the job has been PROCESSING for more than 5 minutes."""
+        from django.utils import timezone
+        if self.status == self.Status.PROCESSING and self.started_at:
+            return (timezone.now() - self.started_at).total_seconds() > 300
+        return False
+
+    @property
+    def can_cancel(self):
+        return self.status in (self.Status.PENDING, self.Status.PROCESSING)
+
+    @property
+    def can_retry(self):
+        return self.status in (self.Status.FAILED, self.Status.PARTIAL, self.Status.PROCESSING)
