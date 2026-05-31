@@ -192,4 +192,32 @@ R2_BUCKET_NAME       = env("R2_BUCKET_NAME",       default="nepal-aq")
 
 # ── Archive settings ──────────────────────────────────────────────────────────
 # Raw readings older than this many days are archived to R2 and deleted from Postgres.
+# Only used when AQ_INGESTION["db_raw_enabled"] = True.
 ARCHIVE_AFTER_DAYS = env.int("ARCHIVE_AFTER_DAYS", default=90)
+
+# ── Ingestion storage settings ────────────────────────────────────────────────
+# Controls where raw minute-level readings land and what aggregates go to Postgres.
+#
+# Recommended production config (set via Render env vars):
+#   AQ_DB_RAW_ENABLED=false          → raw readings go to R2 parquet only (saves ~95% DB space)
+#   AQ_DB_RAW_RECENT_DAYS=0          → (ignored when db_raw_enabled=False)
+#   AQ_DB_AGGREGATES=hourly,daily    → only hourly+daily in DB (drop tenmin to save more)
+#   AQ_R2_PARTITION_BY=month         → one parquet file per sensor per month in R2
+#
+AQ_INGESTION = {
+    # Store raw minute readings in PostgreSQL (CanonicalReading table).
+    # False = readings go straight to R2 parquet; DB holds aggregates only.
+    "db_raw_enabled": env.bool("AQ_DB_RAW_ENABLED", default=False),
+
+    # When db_raw_enabled=True: only keep readings from the last N days in DB.
+    # 0 = keep everything (only safe with a large DB plan).
+    "db_raw_recent_days": env.int("AQ_DB_RAW_RECENT_DAYS", default=0),
+
+    # Which aggregate levels to compute and persist in DB.
+    # Remove "tenmin" to save ~30% more DB space; keep "hourly" and "daily" for the dashboard.
+    "db_aggregates": env.list("AQ_DB_AGGREGATES", default=["tenmin", "hourly", "daily"]),
+
+    # R2 parquet partition granularity: "month" (default), "week", or "day".
+    # "month" gives one ~2-5 MB file per sensor per month — easy to download and inspect.
+    "r2_partition_by": env("AQ_R2_PARTITION_BY", default="month"),
+}

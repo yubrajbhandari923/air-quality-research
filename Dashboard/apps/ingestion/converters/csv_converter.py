@@ -287,15 +287,19 @@ class BelauriCSVConverter(BaseDataConverter):
 
     def run(self, source) -> dict:
         """
-        Override run() to resolve sensor/site FKs before saving.
+        Override run() to resolve sensor/site FKs, write to R2 parquet,
+        and aggregate from in-memory data (no DB raw-read round-trip).
 
-        Looks up or creates the Sensor and Site in the database based on the
-        serial number in the CSV.  This allows the management command to call
-        run() without pre-creating sensors.
+        Pipeline:
+          1. Resolve/create Sensor + Site records
+          2. Parse CSV chunks → long-format records
+          3. Write to R2 wide parquet + optionally CanonicalReading
+          4. Aggregate from in-memory records → DB aggregate tables
+          5. Create Dataset + IngestionLog
         """
-        from django.db import transaction
         from apps.sensors.models import Sensor, Site
         from apps.readings.models import Dataset, IngestionLog
+        from apps.ingestion.tasks import compute_aggregates_from_records
 
         path = Path(source)
 
@@ -303,9 +307,8 @@ class BelauriCSVConverter(BaseDataConverter):
             return {"saved": 0, "duplicates": 0, "errors": 1, "status": "FAILED"}
 
         metadata = self.parse_metadata(path)
-        serial = metadata["serial_number"]
+        serial   = metadata["serial_number"]
 
-        # Ensure site exists
         site, _ = Site.objects.get_or_create(
             name="Belauri",
             defaults={
@@ -323,24 +326,22 @@ class BelauriCSVConverter(BaseDataConverter):
             },
         )
 
-        # Ensure sensor exists
         sensor, created = Sensor.objects.get_or_create(
             serial_number=serial,
             defaults={
                 "friendly_name": metadata["friendly_name"],
-                "model": metadata["model"],
-                "manufacturer": metadata["manufacturer"],
-                "site": site,
-                "is_indoor": metadata["is_indoor"],
-                "status": "ACTIVE",
-                "power_type": "GRID",
+                "model":         metadata["model"],
+                "manufacturer":  metadata["manufacturer"],
+                "site":          site,
+                "is_indoor":     metadata["is_indoor"],
+                "status":        "ACTIVE",
+                "power_type":    "GRID",
                 "connectivity_type": "WIFI",
             },
         )
         if created:
             logger.info("Created sensor %s (%s)", serial, metadata["friendly_name"])
 
-        # Create dataset
         dataset = Dataset.objects.create(
             name=f"Belauri CSV: {path.name}",
             source_type=self.source_type,
@@ -349,15 +350,16 @@ class BelauriCSVConverter(BaseDataConverter):
 
         try:
             total_saved = total_dupes = total_errors = total_attempted = 0
+            all_records: list[dict] = []
 
             for chunk in pd.read_csv(path, low_memory=False, chunksize=5000):
-                chunk = self.normalize_timestamps(chunk)
+                chunk         = self.normalize_timestamps(chunk)
                 chunk_records = self.map_columns(chunk)
                 chunk_records = self.assign_quality_flags(chunk_records)
 
                 for rec in chunk_records:
-                    rec["sensor_id"] = sensor.pk
-                    rec["site_id"] = site.pk
+                    rec["sensor_id"]  = sensor.pk
+                    rec["site_id"]    = site.pk
                     rec["dataset_id"] = dataset.pk
 
                 total_attempted += len(chunk_records)
@@ -365,8 +367,17 @@ class BelauriCSVConverter(BaseDataConverter):
                 total_saved  += br["saved"]
                 total_dupes  += br["duplicates"]
                 total_errors += br["errors"]
+                all_records.extend(chunk_records)
 
-            result = {"saved": total_saved, "duplicates": total_dupes, "errors": total_errors}
+            # ── Aggregate from in-memory records ──────────────────────────────
+            if all_records:
+                try:
+                    compute_aggregates_from_records(
+                        all_records,
+                        sensor_cache={serial: sensor},
+                    )
+                except Exception as exc:
+                    logger.warning("[%s] Aggregation failed: %s", self.source_name, exc)
 
             dataset.record_count = total_saved
             dataset.save(update_fields=["record_count"])
@@ -375,7 +386,6 @@ class BelauriCSVConverter(BaseDataConverter):
                 IngestionLog.Status.SUCCESS if total_errors == 0
                 else IngestionLog.Status.PARTIAL
             )
-
             IngestionLog.objects.create(
                 source_name=self.source_name,
                 source_file=str(path),
@@ -389,10 +399,15 @@ class BelauriCSVConverter(BaseDataConverter):
 
             logger.info(
                 "[%s] %s — saved=%d, duplicates=%d, errors=%d",
-                self.source_name, path.name, result["saved"], result["duplicates"], result["errors"],
+                self.source_name, path.name, total_saved, total_dupes, total_errors,
             )
-            result["status"] = status
-            return result
+            return {
+                "saved": total_saved,
+                "duplicates": total_dupes,
+                "errors": total_errors,
+                "status": status,
+                "sensor_ids": [sensor.pk],
+            }
 
         except Exception as exc:
             logger.exception("[%s] Failed on %s: %s", self.source_name, path, exc)

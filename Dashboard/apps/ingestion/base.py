@@ -6,15 +6,19 @@ Every converter must implement the five abstract methods. The concrete
 and DB persistence so subclasses stay focused on parsing logic.
 
 Pipeline:
-  1. validate_source()       — sanity-check the input (file exists, header ok, …)
-  2. parse_metadata()        — extract sensor/site/dataset info
-  3. normalize_timestamps()  — make all timestamps timezone-aware (Asia/Kathmandu)
-  4. map_columns()           — produce list[dict] in canonical schema
-  5. assign_quality_flags()  — add quality_flag + flag_reason to each record
-  6. save_to_canonical_schema() — persist to DB, detect duplicates, log
+  1. validate_source()          — sanity-check the input
+  2. parse_metadata()           — extract sensor/site/dataset info
+  3. normalize_timestamps()     — make all timestamps timezone-aware
+  4. map_columns()              — produce list[dict] in canonical long schema
+  5. assign_quality_flags()     — add quality_flag + flag_reason to each record
+  6. save_to_canonical_schema() — persist according to AQ_INGESTION settings:
+       • always writes to R2 parquet (wide format, partitioned by month)
+       • writes to CanonicalReading only when db_raw_enabled=True
+       • returns {"saved", "duplicates", "errors"}
 """
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta, timezone as dt_tz
 from typing import Any
 
 import pandas as pd
@@ -25,108 +29,128 @@ logger = logging.getLogger(__name__)
 NEPAL_TZ = pytz.timezone("Asia/Kathmandu")
 
 
+def _aq_cfg() -> dict:
+    """Return the AQ_INGESTION settings dict (with safe defaults)."""
+    from django.conf import settings
+    return getattr(settings, "AQ_INGESTION", {
+        "db_raw_enabled": True,
+        "db_raw_recent_days": 0,
+        "db_aggregates": ["tenmin", "hourly", "daily"],
+        "r2_partition_by": "month",
+    })
+
+
 class BaseDataConverter(ABC):
     """
     Abstract base for all data converters.
 
     Subclasses must set class attributes:
-        source_name  (str) — human-readable identifier, e.g. "BelauriCSVConverter"
+        source_name  (str) — human-readable identifier
         source_type  (str) — must match CanonicalReading.SourceType choices
     """
 
     source_name: str = ""
-    source_type: str = ""  # matches CanonicalReading.SourceType choices
+    source_type: str = ""
 
     # ── Abstract interface ────────────────────────────────────────────────────
 
     @abstractmethod
-    def validate_source(self, source: Any) -> bool:
-        """
-        Verify the input is usable.
-
-        Args:
-            source: file path, URL, or raw data depending on converter type.
-
-        Returns:
-            True if source is valid and processing can proceed.
-        """
-        ...
+    def validate_source(self, source: Any) -> bool: ...
 
     @abstractmethod
-    def parse_metadata(self, source: Any) -> dict:
-        """
-        Extract provenance metadata from the source.
-
-        Returns a dict with at least:
-            sensor_serial  (str)
-            site_name      (str, optional)
-            is_indoor      (bool)
-        """
-        ...
+    def parse_metadata(self, source: Any) -> dict: ...
 
     @abstractmethod
-    def normalize_timestamps(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Convert all timestamp columns to timezone-aware datetimes (Asia/Kathmandu).
-
-        Timestamps without explicit timezone info are assumed to be UTC unless the
-        source documentation says otherwise.
-
-        Returns the DataFrame with a 'original_ts' column that is tz-aware.
-        """
-        ...
+    def normalize_timestamps(self, df: pd.DataFrame) -> pd.DataFrame: ...
 
     @abstractmethod
-    def map_columns(self, df: pd.DataFrame) -> list[dict]:
-        """
-        Transform source-specific columns into canonical reading dicts.
-
-        Each dict in the returned list must contain at minimum:
-            original_ts   (datetime, tz-aware)
-            pollutant     (str — CanonicalReading.Pollutant choice)
-            unit          (str)
-            raw_value     (float or None)
-            sensor_id     (int — Sensor pk)
-            site_id       (int — Site pk)
-            is_indoor     (bool)
-            source_type   (str)
-
-        Optional fields:
-            interval_seconds, dataset_id, timezone
-        """
-        ...
+    def map_columns(self, df: pd.DataFrame) -> list[dict]: ...
 
     @abstractmethod
-    def assign_quality_flags(self, records: list[dict]) -> list[dict]:
-        """
-        Evaluate each record and set 'quality_flag' and 'flag_reason'.
+    def assign_quality_flags(self, records: list[dict]) -> list[dict]: ...
 
-        Default flag is UNVALIDATED.  Apply domain knowledge:
-          - PM2.5 > 500 µg/m³  → SUSPECT  (sensor saturation likely)
-          - PM2.5 < 0          → BAD
-          - Temperature < -10 or > 60 °C → SUSPECT (sensor range)
-          - Exact zero for all channels simultaneously → SUSPECT (sensor off?)
-
-        Never delete records — mark them appropriately.
-        """
-        ...
-
-    # ── Concrete methods ──────────────────────────────────────────────────────
+    # ── Concrete: save ────────────────────────────────────────────────────────
 
     def save_to_canonical_schema(self, records: list[dict]) -> dict:
         """
-        Persist canonical records to the Postgres CanonicalReading table.
+        Persist canonical records according to AQ_INGESTION settings.
 
-        Uses bulk_create with ignore_conflicts=True so duplicate
-        (sensor, pollutant, original_ts) rows are silently skipped.
-        The before/after count gives exact saved vs duplicate counts.
+        Always writes to R2 parquet (if R2 is configured).
+        Writes to CanonicalReading only when db_raw_enabled=True.
 
-        Returns:
-            {"saved": int, "duplicates": int, "errors": int}
+        Returns: {"saved": int, "duplicates": int, "errors": int}
         """
         if not records:
             return {"saved": 0, "duplicates": 0, "errors": 0}
 
+        cfg        = _aq_cfg()
+        db_raw     = cfg.get("db_raw_enabled", True)
+        raw_days   = cfg.get("db_raw_recent_days", 0)
+
+        # ── R2 parquet path (always attempted when R2 is configured) ──────────
+        parquet_result = self._save_to_parquet(records)
+
+        # ── Postgres raw path (opt-in) ────────────────────────────────────────
+        db_result = {"saved": 0, "duplicates": 0, "errors": 0}
+        if db_raw:
+            filtered = records
+            if raw_days > 0:
+                cutoff   = datetime.now(dt_tz.utc) - timedelta(days=raw_days)
+                filtered = [r for r in records if r.get("original_ts") and r["original_ts"] > cutoff]
+            if filtered:
+                db_result = self._save_to_db(filtered)
+
+        # When R2 is available, report parquet counts as the authoritative numbers.
+        # When R2 is not configured (dev), fall back to DB counts.
+        from apps.ingestion.parquet_store import _r2_available
+        if _r2_available():
+            return {
+                "saved":      parquet_result.get("rows_new", 0),
+                "duplicates": parquet_result.get("rows_duplicate", 0),
+                "errors":     parquet_result.get("errors", 0),
+            }
+        return db_result
+
+    def _save_to_parquet(self, records: list[dict]) -> dict:
+        """Write records to R2 wide parquet, grouped by (sensor_id, month)."""
+        from apps.ingestion.parquet_store import long_to_wide, upsert, _r2_available
+        from apps.sensors.models import Sensor
+
+        if not _r2_available():
+            return {"rows_new": 0, "rows_duplicate": 0, "errors": 0}
+
+        # Group records by sensor_id so we can get the serial for the R2 key.
+        by_sensor: dict[int, list[dict]] = {}
+        for rec in records:
+            sid = rec.get("sensor_id")
+            if sid is not None:
+                by_sensor.setdefault(int(sid), []).append(rec)
+
+        total_new = total_dupe = total_errors = 0
+
+        # Cache sensor serial lookups
+        serial_cache: dict[int, str] = {}
+        for sid, sensor_records in by_sensor.items():
+            try:
+                if sid not in serial_cache:
+                    serial_cache[sid] = Sensor.objects.values_list(
+                        "serial_number", flat=True
+                    ).get(pk=sid)
+                serial   = serial_cache[sid]
+                df_wide  = long_to_wide(sensor_records)
+                if df_wide.empty:
+                    continue
+                result        = upsert(serial, df_wide)
+                total_new    += result.get("rows_new", 0)
+                total_dupe   += result.get("rows_duplicate", 0)
+            except Exception as exc:
+                logger.error("Parquet upsert failed for sensor %s: %s", sid, exc)
+                total_errors += len(sensor_records)
+
+        return {"rows_new": total_new, "rows_duplicate": total_dupe, "errors": total_errors}
+
+    def _save_to_db(self, records: list[dict]) -> dict:
+        """Write records to PostgreSQL CanonicalReading using bulk_create."""
         try:
             from apps.readings.models import CanonicalReading
 
@@ -151,8 +175,6 @@ class BaseDataConverter(ABC):
                 for rec in records
             ]
 
-            # Count existing rows in this batch's time window before inserting,
-            # so we can report accurate saved vs duplicate counts.
             sensor_ids = list({o.sensor_id for o in objs})
             ts_list    = [o.original_ts for o in objs]
             ts_min, ts_max = min(ts_list), max(ts_list)
@@ -179,6 +201,8 @@ class BaseDataConverter(ABC):
         except Exception as exc:
             logger.error("[%s] Postgres write failed: %s", self.source_name, exc)
             return {"saved": 0, "duplicates": 0, "errors": len(records)}
+
+    # ── Concrete: run (default — subclasses typically override) ───────────────
 
     def run(self, source: Any) -> dict:
         """
@@ -208,7 +232,6 @@ class BaseDataConverter(ABC):
             metadata = self.parse_metadata(source)
             logger.debug("[%s] Metadata: %s", self.source_name, metadata)
 
-            # Create a Dataset record for provenance
             dataset = Dataset.objects.create(
                 name=f"{self.source_name}: {source}",
                 source_type=self.source_type,
@@ -216,13 +239,11 @@ class BaseDataConverter(ABC):
             )
             log_kwargs["dataset"] = dataset
 
-            # Read raw data into DataFrame
-            df = self._read_source(source)
-            df = self.normalize_timestamps(df)
+            df      = self._read_source(source)
+            df      = self.normalize_timestamps(df)
             records = self.map_columns(df)
             records = self.assign_quality_flags(records)
 
-            # Inject dataset FK into every record
             for rec in records:
                 rec["dataset_id"] = dataset.pk
 
@@ -230,18 +251,16 @@ class BaseDataConverter(ABC):
 
             result = self.save_to_canonical_schema(records)
 
-            # Update dataset record count
             dataset.record_count = result["saved"]
             dataset.save(update_fields=["record_count"])
 
             log_kwargs["status"] = (
-                IngestionLog.Status.SUCCESS
-                if result["errors"] == 0
+                IngestionLog.Status.SUCCESS if result["errors"] == 0
                 else IngestionLog.Status.PARTIAL
             )
-            log_kwargs["records_saved"] = result["saved"]
+            log_kwargs["records_saved"]     = result["saved"]
             log_kwargs["records_duplicate"] = result["duplicates"]
-            log_kwargs["records_error"] = result["errors"]
+            log_kwargs["records_error"]     = result["errors"]
 
             logger.info(
                 "[%s] Complete — saved=%d, duplicates=%d, errors=%d",
@@ -259,11 +278,7 @@ class BaseDataConverter(ABC):
             try:
                 IngestionLog.objects.create(**log_kwargs)
             except Exception:
-                pass  # don't let logging failure mask the real error
+                pass
 
     def _read_source(self, source: Any) -> pd.DataFrame:
-        """
-        Default implementation reads a CSV file.
-        Override in subclasses that use other sources (API responses, etc.).
-        """
         return pd.read_csv(source, low_memory=False)

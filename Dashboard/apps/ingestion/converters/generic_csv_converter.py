@@ -290,12 +290,20 @@ class GenericCSVConverter(BaseDataConverter):
         """
         Full ingestion pipeline for a CSV upload.
 
+        Pipeline:
+          1. Parse CSV → long-format records (in memory)
+          2. Write to R2 wide parquet (deduplicated, partitioned by month)
+          3. If db_raw_enabled=True → write to CanonicalReading
+          4. Aggregate from in-memory DataFrame → upsert TenMin/Hourly/Daily in DB
+          5. Log Dataset + IngestionLog rows
+
         Args:
             source:       File path or file-like object.
             triggered_by: CustomUser instance (for audit log).
             dataset_name: Override the Dataset name shown in logs.
         """
         from apps.readings.models import Dataset, IngestionLog
+        from apps.ingestion.tasks import compute_aggregates_from_records
 
         source_label = dataset_name or (
             source.name if hasattr(source, "name") else str(source)
@@ -314,6 +322,8 @@ class GenericCSVConverter(BaseDataConverter):
 
         try:
             total_saved = total_dupes = total_errors = total_attempted = 0
+            # Accumulate all records across chunks for a single in-memory aggregate pass
+            all_records: list[dict] = []
 
             for chunk in pd.read_csv(source, low_memory=False, chunksize=5000):
                 chunk = self.normalize_timestamps(chunk)
@@ -331,10 +341,9 @@ class GenericCSVConverter(BaseDataConverter):
                 total_saved  += result["saved"]
                 total_dupes  += result["duplicates"]
                 total_errors += result["errors"]
+                all_records.extend(chunk_records)
 
             if total_attempted == 0 and not self._skipped_serials:
-                # CSV parsed OK but produced zero records — no serial mismatches either,
-                # so the columns simply weren't recognised.  Fail with a clear message.
                 IngestionLog.objects.create(
                     source_name=self.source_name,
                     source_file=source_label,
@@ -379,7 +388,12 @@ class GenericCSVConverter(BaseDataConverter):
                     "skipped_serials": list(self._skipped_serials),
                 }
 
-            result = {"saved": total_saved, "duplicates": total_dupes, "errors": total_errors}
+            # ── Aggregate from in-memory records (no R2 download needed) ──────
+            if all_records:
+                try:
+                    compute_aggregates_from_records(all_records, self._sensor_cache)
+                except Exception as exc:
+                    logger.warning("[GenericCSVConverter] Aggregation failed: %s", exc)
 
             dataset.record_count = total_saved
             dataset.save(update_fields=["record_count"])
@@ -400,10 +414,14 @@ class GenericCSVConverter(BaseDataConverter):
                 triggered_by=triggered_by,
             )
 
-            result["status"] = log_status
-            result["skipped_serials"] = list(self._skipped_serials)
-            result["sensor_ids"] = [s.pk for s in self._sensor_cache.values()]
-            return result
+            return {
+                "saved": total_saved,
+                "duplicates": total_dupes,
+                "errors": total_errors,
+                "status": log_status,
+                "skipped_serials": list(self._skipped_serials),
+                "sensor_ids": [s.pk for s in self._sensor_cache.values()],
+            }
 
         except Exception as exc:
             logger.exception("[GenericCSVConverter] Failed: %s", exc)

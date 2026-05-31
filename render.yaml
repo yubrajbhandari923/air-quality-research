@@ -51,6 +51,17 @@ services:
         sync: false
       - key: CORS_ALLOWED_ORIGINS
         sync: false
+      # ── Storage settings (AQ_INGESTION) ─────────────────────────────────────
+      # Set AQ_DB_RAW_ENABLED=true only if you have a large DB plan.
+      # Default (false) = raw minute readings go to R2 parquet; DB holds aggregates only.
+      - key: AQ_DB_RAW_ENABLED
+        value: "false"
+      # Which aggregate levels to keep in DB.  Remove "tenmin" to save ~30% more space.
+      - key: AQ_DB_AGGREGATES
+        value: "tenmin,hourly,daily"
+      # R2 parquet partition granularity: month | week | day
+      - key: AQ_R2_PARTITION_BY
+        value: "month"
 
   # ── Cron 1: process queued CSV uploads (every minute) ──────────────────────
   - type: cron
@@ -128,56 +139,14 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.0"
 
-  # ── Cron 3: archive old raw rows to R2 (once per day at 02:00 UTC) ─────────
-  - type: cron
-    name: nepal-aq-archive
-    runtime: python
-    plan: starter
-    schedule: "0 2 * * *"
-
-    buildCommand: |
-      cd Dashboard
-      pip install -r requirements.txt
-
-    startCommand: |
-      cd Dashboard
-      python manage.py archive_to_r2
-
-    envVars:
-      - key: DJANGO_SETTINGS_MODULE
-        value: nepal_aq.settings.production
-      - key: DJANGO_SECRET_KEY
-        fromService:
-          name: nepal-aq-dashboard
-          type: web
-          envVarKey: DJANGO_SECRET_KEY
-      - key: DJANGO_DEBUG
-        value: "False"
-      - key: DJANGO_ALLOWED_HOSTS
-        value: .onrender.com
-      - key: DATABASE_URL
-        fromDatabase:
-          name: nepal-aq-db
-          property: connectionString
-      - key: PYTHON_VERSION
-        value: "3.12.0"
-      - key: R2_ACCOUNT_ID
-        sync: false
-      - key: R2_ACCESS_KEY_ID
-        sync: false
-      - key: R2_SECRET_ACCESS_KEY
-        sync: false
-      - key: R2_BUCKET_NAME
-        value: nepal-aq
-      - key: ARCHIVE_AFTER_DAYS
-        value: "90"
-
-  # ── Cron 4: daily Postgres backup to R2 (02:30 UTC, after archive) ──────────
+  # ── Cron 3: daily Postgres backup to R2 (02:00 UTC) ──────────────────────────
+  # Backs up the Postgres schema + aggregate tables.  Raw readings live in R2
+  # parquet (processed/<serial>/YYYY/MM/readings.parquet) and don't need backing up.
   - type: cron
     name: nepal-aq-backup
     runtime: python
     plan: starter
-    schedule: "30 2 * * *"
+    schedule: "0 2 * * *"
 
     buildCommand: |
       cd Dashboard
