@@ -81,6 +81,25 @@ class Command(BaseCommand):
                     f"Job {job.pk} has no r2_key and no valid file_path."
                 )
 
+            # Mirror the raw CSV to raw/<serial>/<date>_<filename> in R2 so
+            # researchers can find original files by sensor, not by job ID.
+            # This runs before conversion so the copy is safe even if ingestion fails.
+            try:
+                from apps.ingestion.parquet_store import upload_raw_csv, _r2_available
+                if _r2_available() and tmp_path.exists():
+                    # Infer serial from the first CSV row to build the R2 key.
+                    import csv as _csv
+                    with open(tmp_path, newline="", errors="replace") as _f:
+                        header = next(_csv.DictReader(_f), {})
+                    serial_guess = (
+                        header.get("Serial Number")
+                        or header.get("device_serial")
+                        or "unknown"
+                    )
+                    upload_raw_csv(serial_guess, tmp_path, job.original_filename)
+            except Exception as _exc:
+                logger.warning("Job %d: raw CSV mirror failed: %s", job.pk, _exc)
+
             converter = GenericCSVConverter()
             result = converter.run(
                 source=tmp_path,

@@ -52,10 +52,17 @@ services:
       - key: CORS_ALLOWED_ORIGINS
         sync: false
       # ── Storage settings (AQ_INGESTION) ─────────────────────────────────────
-      # Set AQ_DB_RAW_ENABLED=true only if you have a large DB plan.
-      # Default (false) = raw minute readings go to R2 parquet; DB holds aggregates only.
+      # AQ_DB_RAW_ENABLED=false  → raw minute readings go to R2 parquet only.
+      #                             DB holds aggregates + live buffer only.
       - key: AQ_DB_RAW_ENABLED
         value: "false"
+      # AQ_DB_RAW_RECENT_DAYS=7  → keep last 7 days of live API readings in DB
+      #                             so the dashboard chart's "raw" zoom and the
+      #                             GET /api/v1/readings/ endpoint work for recent data.
+      #                             Historical data lives in R2 parquet only.
+      #                             Set to 0 to disable (aggregates-only DB).
+      - key: AQ_DB_RAW_RECENT_DAYS
+        value: "7"
       # Which aggregate levels to keep in DB.  Remove "tenmin" to save ~30% more space.
       - key: AQ_DB_AGGREGATES
         value: "tenmin,hourly,daily"

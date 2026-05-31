@@ -323,7 +323,12 @@ class GenericCSVConverter(BaseDataConverter):
         try:
             total_saved = total_dupes = total_errors = total_attempted = 0
             # Accumulate all records across chunks for a single in-memory aggregate pass
-            all_records: list[dict] = []
+            # agg_frames accumulates a compact DataFrame per chunk for the
+            # post-upload aggregation pass.  Storing typed DataFrames (not
+            # Python dicts) keeps peak memory ~20× lower for large CSVs.
+            agg_frames: list[pd.DataFrame] = []
+            _AGG_COLS = ["original_ts", "pollutant", "raw_value",
+                         "quality_flag", "is_indoor", "sensor_id"]
 
             for chunk in pd.read_csv(source, low_memory=False, chunksize=5000):
                 chunk = self.normalize_timestamps(chunk)
@@ -341,7 +346,11 @@ class GenericCSVConverter(BaseDataConverter):
                 total_saved  += result["saved"]
                 total_dupes  += result["duplicates"]
                 total_errors += result["errors"]
-                all_records.extend(chunk_records)
+
+                frame = pd.DataFrame(chunk_records)
+                present = [c for c in _AGG_COLS if c in frame.columns]
+                if present:
+                    agg_frames.append(frame[present])
 
             if total_attempted == 0 and not self._skipped_serials:
                 IngestionLog.objects.create(
@@ -388,10 +397,12 @@ class GenericCSVConverter(BaseDataConverter):
                     "skipped_serials": list(self._skipped_serials),
                 }
 
-            # ── Aggregate from in-memory records (no R2 download needed) ──────
-            if all_records:
+            # ── Aggregate from in-memory DataFrames (no R2 download needed) ──
+            if agg_frames:
                 try:
-                    compute_aggregates_from_records(all_records, self._sensor_cache)
+                    from apps.ingestion.tasks import compute_aggregates_from_dataframe
+                    agg_df = pd.concat(agg_frames, ignore_index=True)
+                    compute_aggregates_from_dataframe(agg_df, self._sensor_cache)
                 except Exception as exc:
                     logger.warning("[GenericCSVConverter] Aggregation failed: %s", exc)
 

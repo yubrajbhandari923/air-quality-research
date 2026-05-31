@@ -350,7 +350,9 @@ class BelauriCSVConverter(BaseDataConverter):
 
         try:
             total_saved = total_dupes = total_errors = total_attempted = 0
-            all_records: list[dict] = []
+            agg_frames: list[pd.DataFrame] = []
+            _AGG_COLS = ["original_ts", "pollutant", "raw_value",
+                         "quality_flag", "is_indoor", "sensor_id"]
 
             for chunk in pd.read_csv(path, low_memory=False, chunksize=5000):
                 chunk         = self.normalize_timestamps(chunk)
@@ -367,15 +369,18 @@ class BelauriCSVConverter(BaseDataConverter):
                 total_saved  += br["saved"]
                 total_dupes  += br["duplicates"]
                 total_errors += br["errors"]
-                all_records.extend(chunk_records)
 
-            # ── Aggregate from in-memory records ──────────────────────────────
-            if all_records:
+                frame = pd.DataFrame(chunk_records)
+                present = [c for c in _AGG_COLS if c in frame.columns]
+                if present:
+                    agg_frames.append(frame[present])
+
+            # ── Aggregate from in-memory DataFrames ───────────────────────────
+            if agg_frames:
                 try:
-                    compute_aggregates_from_records(
-                        all_records,
-                        sensor_cache={serial: sensor},
-                    )
+                    from apps.ingestion.tasks import compute_aggregates_from_dataframe
+                    agg_df = pd.concat(agg_frames, ignore_index=True)
+                    compute_aggregates_from_dataframe(agg_df, {serial: sensor})
                 except Exception as exc:
                     logger.warning("[%s] Aggregation failed: %s", self.source_name, exc)
 

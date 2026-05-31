@@ -132,13 +132,20 @@ def _daily_from_df(sensor, site, df: pd.DataFrame, levels: list[str]) -> int:
     df = df.copy()
     df["date"] = df["ts_utc"].dt.normalize().dt.date
 
+    # Use DataFrameGroupBy named agg — mixes string funcs and lambdas cleanly.
     grouped = (
-        df.groupby(["date", "pollutant", "is_indoor"])["raw_value"]
-        .agg(count="count", mean="mean", std="std", lo="min", hi="max",
-             p25=lambda x: x.quantile(0.25),
-             p50=lambda x: x.quantile(0.50),
-             p75=lambda x: x.quantile(0.75),
-             p95=lambda x: x.quantile(0.95))
+        df.groupby(["date", "pollutant", "is_indoor"])
+        .agg(
+            count=("raw_value", "count"),
+            mean=("raw_value", "mean"),
+            std=("raw_value", "std"),
+            lo=("raw_value", "min"),
+            hi=("raw_value", "max"),
+            p25=("raw_value", lambda x: x.quantile(0.25)),
+            p50=("raw_value", lambda x: x.quantile(0.50)),
+            p75=("raw_value", lambda x: x.quantile(0.75)),
+            p95=("raw_value", lambda x: x.quantile(0.95)),
+        )
         .reset_index()
     )
 
@@ -196,6 +203,64 @@ def _long_df_for_aggregation(records: list[dict]) -> pd.DataFrame:
 
 
 # ── Public: post-upload aggregation ───────────────────────────────────────────
+
+def compute_aggregates_from_dataframe(df: pd.DataFrame, sensor_cache: dict) -> dict:
+    """
+    Compute TenMin/Hourly/Daily aggregates from an already-built DataFrame.
+
+    ``df`` must have columns: original_ts, pollutant, raw_value, quality_flag,
+    is_indoor, sensor_id.  Created by the CSV converters to avoid keeping
+    millions of Python dicts in memory.
+    """
+    from apps.sensors.models import Sensor
+
+    cfg    = _aq_cfg()
+    levels = cfg.get("db_aggregates", ["tenmin", "hourly", "daily"])
+    if not levels or df.empty:
+        return {"sensors_processed": 0}
+
+    id_to_sensor: dict[int, object] = {}
+    for key, sensor in sensor_cache.items():
+        if isinstance(key, int):
+            id_to_sensor[key] = sensor
+        else:
+            id_to_sensor[sensor.pk] = sensor
+
+    total_tenmin = total_hourly = total_daily = errors = 0
+
+    for sid, group in df.groupby("sensor_id"):
+        try:
+            sensor = id_to_sensor.get(int(sid)) or Sensor.objects.select_related("site").get(pk=sid)
+            site   = sensor.site
+
+            # Reuse _long_df_for_aggregation logic directly on the group
+            agg = group.copy()
+            agg["ts_utc"] = pd.to_datetime(agg["original_ts"], utc=True)
+            if "quality_flag" in agg.columns:
+                agg = agg[agg["quality_flag"].isin(["GOOD", "UNVALIDATED"])].copy()
+            agg = agg[agg["raw_value"].notna()].copy()
+            agg["raw_value"] = pd.to_numeric(agg["raw_value"], errors="coerce")
+            agg = agg[agg["raw_value"].notna()][["ts_utc", "pollutant", "raw_value", "is_indoor"]].copy()
+
+            if agg.empty:
+                continue
+
+            total_tenmin += _tenmin_from_df(sensor, site, agg, levels)
+            total_hourly += _hourly_from_df(sensor, site, agg, levels)
+            total_daily  += _daily_from_df(sensor, site, agg, levels)
+
+        except Exception as exc:
+            logger.exception("Aggregation (from df) failed for sensor %s: %s", sid, exc)
+            errors += 1
+
+    return {
+        "sensors_processed": len(df["sensor_id"].unique()),
+        "tenmin_rows": total_tenmin,
+        "hourly_rows": total_hourly,
+        "daily_rows":  total_daily,
+        "errors":      errors,
+    }
+
 
 def compute_aggregates_from_records(records: list[dict], sensor_cache: dict) -> dict:
     """
@@ -508,7 +573,11 @@ def compute_aggregates(sensor_id=None, since: datetime | None = None) -> dict:
 
             else:
                 # ── R2 parquet path ───────────────────────────────────────────
-                since_dt = since if since else default_since
+                # Default cron lookback is 2 days — enough to catch any missed
+                # aggregations without downloading months of parquet every run.
+                # Pass --since YYYY-MM-DDT00:00:00Z for a full historical backfill.
+                cron_since = until_dt - timedelta(days=2)
+                since_dt = since if since else cron_since
                 result = _compute_aggregates_from_r2(sensor, since_dt, until_dt)
                 total_tenmin += result["tenmin_rows"]
                 total_hourly += result["hourly_rows"]

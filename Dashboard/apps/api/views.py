@@ -410,6 +410,13 @@ class BatchReadingView(APIView):
 
         result = converter.save_to_canonical_schema(all_records)
 
+        # Update aggregate tables from the in-memory batch (keeps dashboard live)
+        try:
+            from apps.ingestion.tasks import compute_aggregates_from_records
+            compute_aggregates_from_records(all_records, {serial: sensor})
+        except Exception as exc:
+            logger.warning("BatchReadingView: aggregation failed for %s: %s", serial, exc)
+
         IngestionLog.objects.create(
             source_name="BatchAPIConverter",
             status=IngestionLog.Status.SUCCESS if result["errors"] == 0 else IngestionLog.Status.PARTIAL,
@@ -1342,48 +1349,86 @@ class ExportReadingsView(APIView):
         """
         Return a wide-format DataFrame: one row per (sensor, timestamp),
         pollutant values spread across columns.  Matches native sensor export format.
+
+        Data source routing (based on AQ_INGESTION settings):
+          Recent window (≤ db_raw_recent_days)  → CanonicalReading (Postgres)
+          Historical window (older)              → R2 parquet
+          db_raw_enabled=True                    → everything from Postgres
+
+        Both sources are merged and deduplicated on (sensor_id, ts) before formatting.
         """
         import pandas as pd
+        from apps.ingestion.base import _aq_cfg
+        from apps.ingestion.parquet_store import _r2_available
 
-        # ── Fetch long-format data from Postgres CanonicalReading ──────────────
-        qs = CanonicalReading.objects.filter(
-            sensor_id__in=sensor_ids, is_duplicate=False,
-        ).order_by("original_ts")
-        if pollutants:
-            qs = qs.filter(pollutant__in=pollutants)
-        if quality != "ALL":
-            qs = qs.filter(quality_flag=quality)
-        if start_ts:
-            qs = qs.filter(original_ts__gte=start_ts)
-        if end_ts:
-            qs = qs.filter(original_ts__lte=end_ts)
-        rows = list(qs[:max_rows].values(
-            "sensor_id", "original_ts", "pollutant", "raw_value", "is_indoor",
-        ))
-        df_long = pd.DataFrame()
-        if rows:
-            df_long = pd.DataFrame(rows)
-            df_long = df_long.rename(columns={"original_ts": "ts", "raw_value": "value"})
+        cfg      = _aq_cfg()
+        db_raw   = cfg.get("db_raw_enabled", True)
+        raw_days = cfg.get("db_raw_recent_days", 0)
 
-        if df_long.empty:
+        # ── Determine which time window each source covers ─────────────────────
+        #
+        #   db_raw=True               → all data in DB, no R2 needed
+        #   db_raw=False, days>0      → DB has last `days` days; R2 has everything older
+        #   db_raw=False, days=0      → nothing in DB; R2 has everything
+        #
+        now = timezone.now()
+        if db_raw:
+            db_cutoff = None          # no lower bound — DB has everything
+        elif raw_days > 0:
+            db_cutoff = now - timedelta(days=raw_days)
+        else:
+            db_cutoff = now           # effectively nothing in DB
+
+        frames = []
+
+        # ── Fetch from Postgres (recent / live window) ────────────────────────
+        # Only bother if the requested range overlaps with what's in DB.
+        db_fetch_start = (
+            max(start_ts, db_cutoff) if (start_ts and db_cutoff) else (start_ts or db_cutoff)
+        )
+        db_fetch_end = end_ts
+        if db_cutoff is None or (end_ts is None or end_ts >= db_cutoff):
+            db_frame = self._pivot_from_db(
+                sensor_ids, pollutants,
+                start_ts=db_fetch_start,
+                end_ts=db_fetch_end,
+                quality=quality,
+                max_rows=max_rows,
+            )
+            if not db_frame.empty:
+                frames.append(db_frame)
+
+        # ── Fetch from R2 parquet (historical window) ─────────────────────────
+        # Only when: raw mode is disabled, R2 is configured, and the request
+        # reaches back further than the DB live-buffer boundary.
+        needs_r2 = (
+            not db_raw
+            and _r2_available()
+            and start_ts is not None
+            and (db_cutoff is None or start_ts < db_cutoff)
+        )
+        if needs_r2:
+            r2_remaining = max(0, max_rows - sum(len(f) for f in frames))
+            r2_frame = self._pivot_from_r2(
+                sensor_ids, sensor_map, pollutants,
+                start_ts=start_ts,
+                end_ts=db_cutoff,   # R2 covers start → DB boundary
+                quality=quality,
+                max_rows=r2_remaining,
+            )
+            if not r2_frame.empty:
+                frames.append(r2_frame)
+
+        if not frames:
             return pd.DataFrame(columns=_WIDE_COLUMN_ORDER)
 
-        # ── Pivot to wide format ───────────────────────────────────────────────
-        df_wide = df_long.pivot_table(
-            index=["sensor_id", "ts"],
-            columns="pollutant",
-            values="value",
-            aggfunc="first",
-        ).reset_index()
-        df_wide.columns.name = None
-
-        # Normalize sensor_id to plain Python int so dict lookups against sensor_map work
-        df_wide["sensor_id"] = df_wide["sensor_id"].astype(object).apply(
-            lambda x: int(x) if x is not None and x == x else None
+        # ── Merge sources, deduplicate on (sensor_id, ts) ─────────────────────
+        df_wide = (
+            pd.concat(frames, ignore_index=True)
+            .drop_duplicates(subset=["sensor_id", "ts"])
+            .sort_values(["sensor_id", "ts"])
+            .reset_index(drop=True)
         )
-
-        # Rename pollutant codes → display column names
-        df_wide.rename(columns=_WIDE_POLLUTANT_MAP, inplace=True)
 
         # ── Sensor metadata columns ────────────────────────────────────────────
         def _sattr(sid, attr, default=""):
@@ -1409,7 +1454,7 @@ class ExportReadingsView(APIView):
         df_wide["Latitude"]      = df_wide["sensor_id"].map(lambda x: _site_attr(x, "latitude"))
         df_wide["Longitude"]     = df_wide["sensor_id"].map(lambda x: _site_attr(x, "longitude"))
         df_wide["Is Indoor"]     = df_wide["sensor_id"].map(lambda x: _sattr(x, "is_indoor", False))
-        df_wide["Is Public"]      = True
+        df_wide["Is Public"]     = True
 
         # ── Computed AQI columns ───────────────────────────────────────────────
         df_wide["PM2.5 AQI"] = df_wide["PM2.5"].apply(_compute_pm25_aqi) if "PM2.5" in df_wide.columns else None
@@ -1420,14 +1465,12 @@ class ExportReadingsView(APIView):
             if col not in df_wide.columns:
                 df_wide[col] = "<nil>" if col in _OFFSET_COLS else ""
 
-        # Offset columns that had a value set to empty → keep as <nil>
         for col in _OFFSET_COLS:
             if col in df_wide.columns:
                 df_wide[col] = df_wide[col].where(df_wide[col] != "", "<nil>")
 
         # ── Reorder and filter columns ─────────────────────────────────────────
         if requested_cols:
-            # User selected specific columns from the wizard
             cols_to_use = [c for c in _WIDE_COLUMN_ORDER if c in requested_cols and c in df_wide.columns]
             if not cols_to_use:
                 cols_to_use = [c for c in _WIDE_COLUMN_ORDER if c in df_wide.columns]
@@ -1435,6 +1478,113 @@ class ExportReadingsView(APIView):
             cols_to_use = [c for c in _WIDE_COLUMN_ORDER if c in df_wide.columns]
 
         return df_wide[cols_to_use]
+
+    def _pivot_from_db(self, sensor_ids, pollutants, start_ts, end_ts, quality, max_rows):
+        """
+        Fetch from CanonicalReading (long format) and pivot to wide.
+
+        Returns a DataFrame with columns: sensor_id (int), ts (datetime),
+        plus display-name pollutant columns (PM2.5, PM10, …).
+        """
+        import pandas as pd
+
+        qs = CanonicalReading.objects.filter(
+            sensor_id__in=sensor_ids, is_duplicate=False,
+        ).order_by("original_ts")
+        if pollutants:
+            qs = qs.filter(pollutant__in=pollutants)
+        if quality != "ALL":
+            qs = qs.filter(quality_flag=quality)
+        if start_ts:
+            qs = qs.filter(original_ts__gte=start_ts)
+        if end_ts:
+            qs = qs.filter(original_ts__lte=end_ts)
+
+        rows = list(qs[:max_rows].values("sensor_id", "original_ts", "pollutant", "raw_value"))
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows)
+        df = df.rename(columns={"original_ts": "ts", "raw_value": "value"})
+
+        wide = df.pivot_table(
+            index=["sensor_id", "ts"],
+            columns="pollutant",
+            values="value",
+            aggfunc="first",
+        ).reset_index()
+        wide.columns.name = None
+        wide["sensor_id"] = wide["sensor_id"].astype(object).apply(
+            lambda x: int(x) if x is not None and x == x else None
+        )
+        wide.rename(columns=_WIDE_POLLUTANT_MAP, inplace=True)
+        return wide
+
+    def _pivot_from_r2(self, sensor_ids, sensor_map, pollutants_filter,
+                       start_ts, end_ts, quality, max_rows):
+        """
+        Read R2 parquet for each sensor in the date range, apply quality and
+        pollutant filters, and return a wide DataFrame matching the DB pivot format.
+
+        Quality filtering is applied per-pollutant column: values whose quality
+        flag does not match the requested quality are set to NaN (not dropped),
+        preserving the row for other pollutants that do pass.
+        """
+        import pandas as pd
+        from apps.ingestion.parquet_store import read as parquet_read, POLLUTANTS as ALL_POLLS
+
+        frames = []
+        remaining = max(0, max_rows)
+
+        for sensor_id in sensor_ids:
+            if remaining <= 0:
+                break
+            sensor = sensor_map.get(sensor_id)
+            if sensor is None:
+                continue
+
+            df = parquet_read(sensor.serial_number, start_ts, end_ts)
+            if df.empty:
+                continue
+
+            df = df.rename(columns={"ts_utc": "ts"})
+
+            # Apply per-pollutant quality filter: null out values that don't pass.
+            # This mirrors how the DB query filters individual (ts, pollutant) rows.
+            if quality != "ALL":
+                for poll_code in ALL_POLLS:
+                    if poll_code in df.columns and f"qf_{poll_code}" in df.columns:
+                        bad = df[f"qf_{poll_code}"] != quality
+                        df.loc[bad, poll_code] = float("nan")
+
+            # Drop qf_ columns — not included in export output
+            qf_cols = [c for c in df.columns if c.startswith("qf_")]
+            df = df.drop(columns=qf_cols + ["source_type", "is_indoor"], errors="ignore")
+
+            # Keep only requested pollutant columns (if filter is active)
+            active_polls = pollutants_filter if pollutants_filter else ALL_POLLS
+            poll_cols = [p for p in active_polls if p in df.columns]
+            if not poll_cols:
+                continue
+
+            df = df[["ts"] + poll_cols].copy()
+
+            # Drop rows where all pollutant values are NaN after quality filtering
+            df = df.dropna(subset=poll_cols, how="all")
+            if df.empty:
+                continue
+
+            df["sensor_id"] = sensor_id
+            df.rename(columns=_WIDE_POLLUTANT_MAP, inplace=True)
+
+            df = df.head(remaining)
+            remaining -= len(df)
+            frames.append(df)
+
+        if not frames:
+            return pd.DataFrame()
+
+        return pd.concat(frames, ignore_index=True)
 
     def _export_hourly(self, sensor_ids, sensor_map, pollutants, start_ts, end_ts, quality_flags, max_rows):
         import pandas as pd

@@ -75,33 +75,45 @@ class BaseDataConverter(ABC):
         """
         Persist canonical records according to AQ_INGESTION settings.
 
-        Always writes to R2 parquet (if R2 is configured).
-        Writes to CanonicalReading only when db_raw_enabled=True.
+        R2 parquet path (always, when R2 is configured):
+            All records are written to processed/<serial>/YYYY/MM/readings.parquet.
+
+        Postgres / CanonicalReading path — written when ANY of these is true:
+            • db_raw_enabled=True  → store all raw readings in DB
+            • db_raw_recent_days>0 → keep a rolling N-day window in DB as a
+              live buffer for the dashboard, regardless of db_raw_enabled.
+              Set this to 7 so live API readings remain queryable by the chart
+              and export endpoints without filling the DB with historical data.
 
         Returns: {"saved": int, "duplicates": int, "errors": int}
         """
         if not records:
             return {"saved": 0, "duplicates": 0, "errors": 0}
 
-        cfg        = _aq_cfg()
-        db_raw     = cfg.get("db_raw_enabled", True)
-        raw_days   = cfg.get("db_raw_recent_days", 0)
+        cfg      = _aq_cfg()
+        db_raw   = cfg.get("db_raw_enabled", True)
+        raw_days = cfg.get("db_raw_recent_days", 0)
 
         # ── R2 parquet path (always attempted when R2 is configured) ──────────
         parquet_result = self._save_to_parquet(records)
 
-        # ── Postgres raw path (opt-in) ────────────────────────────────────────
+        # ── Postgres path — full store OR rolling live-buffer window ──────────
         db_result = {"saved": 0, "duplicates": 0, "errors": 0}
-        if db_raw:
-            filtered = records
-            if raw_days > 0:
+        if db_raw or raw_days > 0:
+            if db_raw and raw_days == 0:
+                # Keep everything in DB
+                filtered = records
+            else:
+                # Rolling window: only keep records newer than raw_days ago
                 cutoff   = datetime.now(dt_tz.utc) - timedelta(days=raw_days)
-                filtered = [r for r in records if r.get("original_ts") and r["original_ts"] > cutoff]
+                filtered = [
+                    r for r in records
+                    if r.get("original_ts") and r["original_ts"] > cutoff
+                ]
             if filtered:
                 db_result = self._save_to_db(filtered)
 
-        # When R2 is available, report parquet counts as the authoritative numbers.
-        # When R2 is not configured (dev), fall back to DB counts.
+        # Report parquet counts when R2 is the primary store, DB counts otherwise.
         from apps.ingestion.parquet_store import _r2_available
         if _r2_available():
             return {

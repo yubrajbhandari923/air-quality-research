@@ -131,13 +131,13 @@ def long_to_wide(records: list[dict]) -> pd.DataFrame:
         pollutant     — canonical pollutant code
         raw_value     — float or None
         quality_flag  — string
-        is_indoor     — bool
+        is_indoor     — bool (defaults to False if missing/None)
         source_type   — string
 
     Output columns:
         ts_utc, is_indoor, source_type
         <POLLUTANT>    (float32, NaN when not measured)
-        qf_<POLLUTANT> (string, 'MISSING' when not measured)
+        qf_<POLLUTANT> (string)
     """
     if not records:
         return pd.DataFrame()
@@ -147,17 +147,29 @@ def long_to_wide(records: list[dict]) -> pd.DataFrame:
         return pd.DataFrame()
 
     df["ts_utc"] = pd.to_datetime(df["original_ts"], utc=True).dt.floor("s")
+    # is_indoor may be None/NaN (e.g. API records before the FK is attached)
+    df["is_indoor"] = df["is_indoor"].fillna(False).astype(bool)
 
-    # Pivot raw values (wide)
+    # Pivot raw values on ts_utc only — source_type must NOT be in the index.
+    # Including source_type would create two rows for the same timestamp when
+    # one came via API (LIVE_API) and another via CSV (CSV_UPLOAD), breaking
+    # deduplication.  Take the first non-null value per (ts, pollutant).
     val_pivot = df.pivot_table(
-        index=["ts_utc", "is_indoor", "source_type"],
+        index="ts_utc",
         columns="pollutant",
         values="raw_value",
         aggfunc="first",
     ).reset_index()
     val_pivot.columns.name = None
 
-    # Pivot quality flags
+    # Carry is_indoor and source_type from the first record at each timestamp
+    meta = (
+        df.groupby("ts_utc", sort=False)[["is_indoor", "source_type"]]
+        .first()
+        .reset_index()
+    )
+
+    # Pivot quality flags on ts_utc only
     qf_pivot = df.pivot_table(
         index="ts_utc",
         columns="pollutant",
@@ -167,7 +179,7 @@ def long_to_wide(records: list[dict]) -> pd.DataFrame:
     qf_pivot.columns = ["ts_utc"] + [f"qf_{c}" for c in qf_pivot.columns[1:]]
     qf_pivot.columns.name = None
 
-    wide = val_pivot.merge(qf_pivot, on="ts_utc", how="left")
+    wide = val_pivot.merge(meta, on="ts_utc", how="left").merge(qf_pivot, on="ts_utc", how="left")
 
     # Cast pollutant columns to float32 (halves storage vs float64)
     for col in POLLUTANTS:
@@ -257,12 +269,22 @@ def upsert(serial: str, df_wide: pd.DataFrame) -> dict:
             existing  = existing.reindex(columns=all_cols)
             new_rows  = new_rows.reindex(columns=all_cols)
 
+            # Column-wise merge: for rows that appear in both, fill NaN slots in
+            # the new row with the existing value.  This preserves pollutants that
+            # were present in a previous upload but absent in the current one
+            # (e.g. first upload had PM25; second upload has CO2 at the same ts).
+            combined = pd.concat([existing, new_rows], ignore_index=True)
+            # Sort so the new row comes last per timestamp; combine_first fills NaNs
+            # in new rows with existing values.
+            combined = combined.sort_values(["ts_utc", "source_type"], na_position="first")
             merged = (
-                pd.concat([existing, new_rows], ignore_index=True)
-                .drop_duplicates(subset=["ts_utc"], keep="last")
-                .sort_values("ts_utc")
+                combined
+                .groupby("ts_utc", sort=False)
+                .apply(lambda g: g.ffill().iloc[-1])
                 .reset_index(drop=True)
             )
+            merged = merged.sort_values("ts_utc").reset_index(drop=True)
+
             rows_new       += len(merged) - before_count
             rows_duplicate += len(new_rows) - max(0, len(merged) - before_count)
         else:

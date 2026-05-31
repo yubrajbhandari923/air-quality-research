@@ -124,12 +124,18 @@ class APIConverter(BaseDataConverter):
 
     def run(self, source: dict) -> dict:
         """
-        Ingest a live API payload.
+        Ingest a live API payload (single timestamp).
 
-        The sensor and site must already exist in the database (registered via API).
+        Pipeline:
+          1. Write to R2 parquet + live DB buffer (via save_to_canonical_schema)
+          2. Update TenMin/Hourly/Daily aggregates from the in-memory records
+          3. Log to IngestionLog
+
+        The sensor and site must already exist in the database.
         """
         from apps.sensors.models import Sensor
         from apps.readings.models import IngestionLog
+        from apps.ingestion.tasks import compute_aggregates_from_records
 
         if not self.validate_source(source):
             return {"saved": 0, "duplicates": 0, "errors": 1, "status": "FAILED"}
@@ -145,17 +151,24 @@ class APIConverter(BaseDataConverter):
                 "error": f"Sensor {serial} not registered. Use /api/v1/sensors/register/ first.",
             }
 
-        df = self._read_source(source)
+        df      = self._read_source(source)
         records = self.map_columns(df)
         records = self.assign_quality_flags(records)
 
         for rec in records:
             rec["sensor_id"] = sensor.pk
-            rec["site_id"] = sensor.site_id
+            rec["site_id"]   = sensor.site_id
             rec["is_indoor"] = sensor.is_indoor
 
-        # Write directly to Postgres — CanonicalReading is the source of truth.
+        # Write to R2 parquet + live DB buffer (controlled by AQ_INGESTION settings)
         result = self.save_to_canonical_schema(records)
+
+        # Update aggregate tables from the in-memory records (keeps dashboard live)
+        if records:
+            try:
+                compute_aggregates_from_records(records, {serial: sensor})
+            except Exception as exc:
+                logger.warning("APIConverter: aggregation failed for %s: %s", serial, exc)
 
         result["status"] = "SUCCESS" if result["errors"] == 0 else "PARTIAL"
 

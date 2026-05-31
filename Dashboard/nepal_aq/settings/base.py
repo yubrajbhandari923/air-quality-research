@@ -209,8 +209,11 @@ AQ_INGESTION = {
     # False = readings go straight to R2 parquet; DB holds aggregates only.
     "db_raw_enabled": env.bool("AQ_DB_RAW_ENABLED", default=False),
 
-    # When db_raw_enabled=True: only keep readings from the last N days in DB.
-    # 0 = keep everything (only safe with a large DB plan).
+    # Rolling live-buffer window in DB (days).  Works independently of db_raw_enabled.
+    # 7 = keep the last 7 days of readings in CanonicalReading so the dashboard
+    #     chart's "raw" zoom (≤2 days) and GET /api/v1/readings/ return live data.
+    #     Historical data beyond 7 days lives in R2 parquet only.
+    # 0 = no live buffer — DB holds aggregates only (chart falls back to hourly).
     "db_raw_recent_days": env.int("AQ_DB_RAW_RECENT_DAYS", default=0),
 
     # Which aggregate levels to compute and persist in DB.
