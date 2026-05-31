@@ -123,6 +123,49 @@ class BaseDataConverter(ABC):
             }
         return db_result
 
+    def _save_to_parquet_df(self, df: pd.DataFrame, sensor_cache: dict | None = None) -> dict:
+        """
+        Upsert from a compact in-memory long DataFrame — avoids per-chunk R2 round-trips.
+
+        df must have columns: original_ts, pollutant, raw_value, quality_flag,
+                              is_indoor, source_type, sensor_id
+
+        sensor_cache: optional {serial → Sensor} mapping to skip serial DB lookups.
+        """
+        from apps.ingestion.parquet_store import long_to_wide, upsert, _r2_available
+        from apps.sensors.models import Sensor
+
+        if not _r2_available() or df.empty:
+            return {"rows_new": 0, "rows_duplicate": 0, "errors": 0}
+
+        # Build sensor_id → serial map from cache to avoid extra DB queries.
+        sid_to_serial: dict[int, str] = {}
+        for serial, sensor in (sensor_cache or {}).items():
+            if hasattr(sensor, "pk"):
+                sid_to_serial[int(sensor.pk)] = str(serial)
+
+        total_new = total_dupe = total_errors = 0
+
+        for sid, group in df.groupby("sensor_id"):
+            try:
+                sid = int(sid)
+                if sid not in sid_to_serial:
+                    sid_to_serial[sid] = Sensor.objects.values_list(
+                        "serial_number", flat=True
+                    ).get(pk=sid)
+                serial  = sid_to_serial[sid]
+                df_wide = long_to_wide(group.to_dict("records"))
+                if df_wide.empty:
+                    continue
+                result       = upsert(serial, df_wide)
+                total_new   += result.get("rows_new", 0)
+                total_dupe  += result.get("rows_duplicate", 0)
+            except Exception as exc:
+                logger.error("Parquet upsert failed for sensor %s: %s", sid, exc)
+                total_errors += len(group)
+
+        return {"rows_new": total_new, "rows_duplicate": total_dupe, "errors": total_errors}
+
     def _save_to_parquet(self, records: list[dict]) -> dict:
         """Write records to R2 wide parquet, grouped by (sensor_id, month)."""
         from apps.ingestion.parquet_store import long_to_wide, upsert, _r2_available

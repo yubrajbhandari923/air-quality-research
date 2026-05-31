@@ -108,15 +108,17 @@ def _upload_parquet(key: str, df: pd.DataFrame) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    buf = io.BytesIO()
+    # pq.write_table closes a plain io.BytesIO in PyArrow >= 15.
+    # Use pa.BufferOutputStream which stays open after the write.
+    sink = pa.BufferOutputStream()
     table = pa.Table.from_pandas(df, preserve_index=False)
-    pq.write_table(table, buf, compression="snappy")
-    buf.seek(0)
+    pq.write_table(table, sink, compression="snappy")
+    data = sink.getvalue().to_pybytes()
     _client().upload_fileobj(
-        buf, _bucket(), key,
+        io.BytesIO(data), _bucket(), key,
         ExtraArgs={"ContentType": "application/octet-stream"},
     )
-    logger.info("R2 parquet write: %s (%d rows, %.1f KB)", key, len(df), buf.tell() / 1024)
+    logger.info("R2 parquet write: %s (%d rows, %.1f KB)", key, len(df), len(data) / 1024)
 
 
 # ── Format conversion ──────────────────────────────────────────────────────────
@@ -269,20 +271,27 @@ def upsert(serial: str, df_wide: pd.DataFrame) -> dict:
             existing  = existing.reindex(columns=all_cols)
             new_rows  = new_rows.reindex(columns=all_cols)
 
-            # Column-wise merge: for rows that appear in both, fill NaN slots in
-            # the new row with the existing value.  This preserves pollutants that
-            # were present in a previous upload but absent in the current one
-            # (e.g. first upload had PM25; second upload has CO2 at the same ts).
+            # Column-wise merge: for rows at the same ts_utc, take the last
+            # non-NaN value per column.  Sorting existing first / new last means
+            # new values win where present; existing values fill in where new is NaN.
+            # groupby.last(skipna=True) is a C-level op — no Python call per group.
             combined = pd.concat([existing, new_rows], ignore_index=True)
-            # Sort so the new row comes last per timestamp; combine_first fills NaNs
-            # in new rows with existing values.
             combined = combined.sort_values(["ts_utc", "source_type"], na_position="first")
-            merged = (
-                combined
-                .groupby("ts_utc", sort=False)
-                .apply(lambda g: g.ffill().iloc[-1])
-                .reset_index(drop=True)
-            )
+            try:
+                merged = (
+                    combined
+                    .groupby("ts_utc", sort=True)
+                    .last(skipna=True)
+                    .reset_index()
+                )
+            except TypeError:
+                # pandas < 2.2 — last() skips NaN by default (no skipna param)
+                merged = (
+                    combined
+                    .groupby("ts_utc", sort=True)
+                    .last()
+                    .reset_index()
+                )
             merged = merged.sort_values("ts_utc").reset_index(drop=True)
 
             rows_new       += len(merged) - before_count

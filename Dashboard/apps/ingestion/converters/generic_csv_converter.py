@@ -291,19 +291,20 @@ class GenericCSVConverter(BaseDataConverter):
         Full ingestion pipeline for a CSV upload.
 
         Pipeline:
-          1. Parse CSV → long-format records (in memory)
-          2. Write to R2 wide parquet (deduplicated, partitioned by month)
-          3. If db_raw_enabled=True → write to CanonicalReading
+          1. Parse CSV in chunks → accumulate compact DataFrame per chunk
+          2. DB write per chunk (small, fast) — only when db_raw_enabled / live-buffer
+          3. After all chunks: single R2 parquet upsert (avoids N download round-trips)
           4. Aggregate from in-memory DataFrame → upsert TenMin/Hourly/Daily in DB
-          5. Log Dataset + IngestionLog rows
 
         Args:
             source:       File path or file-like object.
             triggered_by: CustomUser instance (for audit log).
             dataset_name: Override the Dataset name shown in logs.
         """
+        from datetime import datetime, timedelta, timezone as dt_tz
         from apps.readings.models import Dataset, IngestionLog
-        from apps.ingestion.tasks import compute_aggregates_from_records
+        from apps.ingestion.base import _aq_cfg
+        from apps.ingestion.parquet_store import _r2_available
 
         source_label = dataset_name or (
             source.name if hasattr(source, "name") else str(source)
@@ -321,14 +322,18 @@ class GenericCSVConverter(BaseDataConverter):
         )
 
         try:
+            cfg      = _aq_cfg()
+            db_raw   = cfg.get("db_raw_enabled", True)
+            raw_days = cfg.get("db_raw_recent_days", 0)
+            db_write_active = db_raw or raw_days > 0
+
             total_saved = total_dupes = total_errors = total_attempted = 0
-            # Accumulate all records across chunks for a single in-memory aggregate pass
-            # agg_frames accumulates a compact DataFrame per chunk for the
-            # post-upload aggregation pass.  Storing typed DataFrames (not
-            # Python dicts) keeps peak memory ~20× lower for large CSVs.
-            agg_frames: list[pd.DataFrame] = []
+
+            # Compact DataFrame accumulation — 7 typed columns instead of full dicts.
+            # source_type is included so long_to_wide can carry it into parquet.
             _AGG_COLS = ["original_ts", "pollutant", "raw_value",
-                         "quality_flag", "is_indoor", "sensor_id"]
+                         "quality_flag", "is_indoor", "source_type", "sensor_id"]
+            agg_frames: list[pd.DataFrame] = []
 
             for chunk in pd.read_csv(source, low_memory=False, chunksize=5000):
                 chunk = self.normalize_timestamps(chunk)
@@ -342,12 +347,25 @@ class GenericCSVConverter(BaseDataConverter):
                     rec["dataset_id"] = dataset.pk
 
                 total_attempted += len(chunk_records)
-                result = self.save_to_canonical_schema(chunk_records)
-                total_saved  += result["saved"]
-                total_dupes  += result["duplicates"]
-                total_errors += result["errors"]
 
-                frame = pd.DataFrame(chunk_records)
+                # DB write per chunk — only when a live-buffer or full-raw mode is on.
+                # Parquet upsert is deferred to after the loop (single batch).
+                if db_write_active:
+                    if db_raw and raw_days == 0:
+                        filtered = chunk_records
+                    else:
+                        cutoff   = datetime.now(dt_tz.utc) - timedelta(days=raw_days)
+                        filtered = [
+                            r for r in chunk_records
+                            if r.get("original_ts") and r["original_ts"] > cutoff
+                        ]
+                    if filtered:
+                        db_res        = self._save_to_db(filtered)
+                        total_saved  += db_res["saved"]
+                        total_dupes  += db_res["duplicates"]
+                        total_errors += db_res["errors"]
+
+                frame   = pd.DataFrame(chunk_records)
                 present = [c for c in _AGG_COLS if c in frame.columns]
                 if present:
                     agg_frames.append(frame[present])
@@ -397,11 +415,20 @@ class GenericCSVConverter(BaseDataConverter):
                     "skipped_serials": list(self._skipped_serials),
                 }
 
-            # ── Aggregate from in-memory DataFrames (no R2 download needed) ──
+            # ── Single parquet upsert + aggregation after all chunks are done ──
             if agg_frames:
+                agg_df = pd.concat(agg_frames, ignore_index=True)
+
+                if _r2_available():
+                    parquet_res = self._save_to_parquet_df(agg_df, self._sensor_cache)
+                    if not db_write_active:
+                        # R2 is the only store — report its counts.
+                        total_saved  = parquet_res.get("rows_new", 0)
+                        total_dupes  = parquet_res.get("rows_duplicate", 0)
+                        total_errors += parquet_res.get("errors", 0)
+
                 try:
                     from apps.ingestion.tasks import compute_aggregates_from_dataframe
-                    agg_df = pd.concat(agg_frames, ignore_index=True)
                     compute_aggregates_from_dataframe(agg_df, self._sensor_cache)
                 except Exception as exc:
                     logger.warning("[GenericCSVConverter] Aggregation failed: %s", exc)
