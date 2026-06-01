@@ -71,6 +71,23 @@
     </div>
     {% endif %}
 
+    {# Developer docs — all portal users #}
+    <div class="portal-card">
+      <div class="portal-card-icon bg-sky-50 text-sky-700">
+        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      </div>
+      <h3 class="portal-card-title">Developer docs</h3>
+      <p class="portal-card-body">Full REST API reference — endpoints, permission tiers, request examples, pollutant codes, and quality flags.</p>
+      <div class="mt-4 space-y-1.5">
+        <a href="{% url 'portal:developer_docs' %}"                    class="portal-link font-semibold">Open API reference →</a>
+        <a href="{% url 'portal:developer_docs' %}#admin"              class="portal-link">Admin management endpoints</a>
+        <a href="{% url 'portal:developer_docs' %}#sensor-write"       class="portal-link">Sensor write endpoints</a>
+        <a href="{% url 'portal:developer_docs' %}#pollutants"         class="portal-link">Pollutant codes &amp; quality flags</a>
+      </div>
+    </div>
+
     {# Data download — researcher + admin #}
     {% if user.role in 'RESEARCHER ADMIN' %}
     <div class="portal-card">

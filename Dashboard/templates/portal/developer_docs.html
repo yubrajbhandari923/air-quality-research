@@ -1,0 +1,603 @@
+{% extends "base.html" %}
+{% block title %}Developer Docs — Portal{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 py-10">
+
+  {# ── Header ────────────────────────────────────────────────────────────── #}
+  <div class="mb-8">
+    <a href="{% url 'portal:index' %}" class="text-sm text-slate-500 hover:text-slate-700">← Portal</a>
+    <h1 class="mt-1 text-2xl font-bold text-slate-900">Developer Docs</h1>
+    <p class="mt-1 text-sm text-slate-500">
+      REST API reference, authentication guide, and data dictionary for the Nepal Air Observatory.
+    </p>
+  </div>
+
+  <div class="flex gap-8 items-start">
+
+    {# ── Sticky sidebar nav ────────────────────────────────────────────────── #}
+    <nav class="hidden lg:block w-52 flex-shrink-0 sticky top-6 self-start">
+      <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">On this page</p>
+      <ul class="space-y-1 text-sm">
+        <li><a href="#auth"          class="block text-slate-600 hover:text-nao-blue py-0.5">Authentication</a></li>
+        <li><a href="#tiers"         class="block text-slate-600 hover:text-nao-blue py-0.5">Permission tiers</a></li>
+        <li><a href="#public"        class="block text-slate-600 hover:text-nao-blue py-0.5 pl-3 border-l border-slate-200">Public endpoints</a></li>
+        <li><a href="#sensor-write"  class="block text-slate-600 hover:text-nao-blue py-0.5 pl-3 border-l border-slate-200">Sensor endpoints</a></li>
+        <li><a href="#researcher"    class="block text-slate-600 hover:text-nao-blue py-0.5 pl-3 border-l border-slate-200">Researcher endpoints</a></li>
+        <li><a href="#admin"         class="block text-slate-600 hover:text-nao-blue py-0.5 pl-3 border-l border-slate-200">Admin endpoints</a></li>
+        <li><a href="#pollutants"    class="block text-slate-600 hover:text-nao-blue py-0.5">Pollutant codes</a></li>
+        <li><a href="#quality-flags" class="block text-slate-600 hover:text-nao-blue py-0.5">Quality flags</a></li>
+        <li><a href="#sensor-status" class="block text-slate-600 hover:text-nao-blue py-0.5">Sensor status</a></li>
+        <li><a href="#errors"        class="block text-slate-600 hover:text-nao-blue py-0.5">Error responses</a></li>
+        <li><a href="#python"        class="block text-slate-600 hover:text-nao-blue py-0.5">Python example</a></li>
+      </ul>
+    </nav>
+
+    {# ── Main content ──────────────────────────────────────────────────────── #}
+    <div class="flex-1 min-w-0 space-y-10">
+
+      {# ── Authentication ─────────────────────────────────────────────────── #}
+      <section id="auth">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Authentication</h2>
+        <div class="space-y-5">
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-2">API key (recommended for programmatic access)</h3>
+            <p class="text-sm text-slate-600 mb-3">
+              Pass your key in the <code class="text-nao-red bg-red-50 px-1 py-0.5 rounded text-xs">X-API-Key</code> request header.
+              Keys are issued from <a href="{% url 'portal:api_keys' %}" class="text-nao-blue hover:underline">Portal → API Keys</a>.
+            </p>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">curl -H "X-API-Key: &lt;your-64-char-key&gt;" \
+     "https://your-domain/api/v1/sensors/"</pre>
+            <p class="mt-2 text-xs text-slate-400">
+              Keys are stored as PBKDF2-SHA256 hashes — the raw key is shown once at creation and never again.
+            </p>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-2">Session auth (browser / Django admin)</h3>
+            <p class="text-sm text-slate-600">
+              Sign in at <code class="text-nao-red bg-red-50 px-1 py-0.5 rounded text-xs">/users/login/</code>.
+              Subsequent requests carry the session cookie automatically.
+              Session auth grants the same permissions as an API key matching your user role.
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      {# ── Permission tiers ───────────────────────────────────────────────── #}
+      <section id="tiers">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Permission tiers</h2>
+        <p class="text-sm text-slate-600 mb-4">
+          Every endpoint requires a minimum privilege level. The tiers are additive — a higher tier includes all lower-tier capabilities.
+        </p>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Tier</th>
+                <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">API key role</th>
+                <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Session user role</th>
+                <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500">Grants</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 text-xs">
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600">Public</span></td>
+                <td class="px-4 py-3 text-slate-500">None required</td>
+                <td class="px-4 py-3 text-slate-500">None required</td>
+                <td class="px-4 py-3 text-slate-600">Read sensors, sites, charts</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-blue-50 text-blue-700">Sensor</span></td>
+                <td class="px-4 py-3 font-mono text-slate-600">SENSOR or ADMIN</td>
+                <td class="px-4 py-3 text-slate-500">ADMIN session</td>
+                <td class="px-4 py-3 text-slate-600">POST live &amp; batch readings, self-register sensor</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-purple-50 text-purple-700">Researcher</span></td>
+                <td class="px-4 py-3 font-mono text-slate-600">RESEARCHER or ADMIN</td>
+                <td class="px-4 py-3 font-mono text-slate-600">RESEARCHER / MAINTAINER / ADMIN</td>
+                <td class="px-4 py-3 text-slate-600">Query &amp; export readings</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full font-medium bg-red-50 text-red-700">Admin</span></td>
+                <td class="px-4 py-3 font-mono text-slate-600">ADMIN only</td>
+                <td class="px-4 py-3 font-mono text-slate-600">ADMIN only</td>
+                <td class="px-4 py-3 text-slate-600">Create / update / delete sensors &amp; sites; trigger aggregation</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="mt-3 text-xs text-slate-400">
+          ADMIN API keys can only be issued by a Django superuser from the admin panel.
+          SENSOR and RESEARCHER keys can be self-served from <a href="{% url 'portal:api_keys' %}" class="text-nao-blue hover:underline">Portal → API Keys</a>.
+        </p>
+      </section>
+
+      {# ── Public endpoints ───────────────────────────────────────────────── #}
+      <section id="public">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">
+          Public endpoints
+          <span class="ml-2 text-xs font-normal inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">No auth</span>
+        </h2>
+
+        <div class="space-y-5">
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Sensors &amp; sites</h3>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">GET /api/v1/sensors/                  # list all sensors
+GET /api/v1/sensors/?status=ACTIVE    # filter by status
+GET /api/v1/sensors/?site=3           # filter by site
+GET /api/v1/sensors/{id}/             # detail + last-7-day PM2.5 stats
+
+GET /api/v1/sites/                    # list all monitoring sites
+GET /api/v1/sites/{id}/               # site detail</pre>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Chart data</h3>
+            <p class="text-xs text-slate-500 mb-3">
+              Resolution is chosen automatically: ≤ 2 days → raw (max 2,000 pts) · ≤ 60 days → hourly · &gt; 60 days → daily.
+            </p>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">GET /api/v1/charts/sensor/{id}/timeseries/?pollutant=PM25&amp;window=7d
+GET /api/v1/charts/sensor/{id}/timeseries/?pollutant=PM25&amp;start=2026-01-01&amp;end=2026-04-01
+GET /api/v1/charts/sensor/{id}/completeness/
+GET /api/v1/charts/sensor/{id}/diurnal/?pollutant=PM25
+GET /api/v1/charts/sensor/{id}/monthly/?pollutant=PM25
+GET /api/v1/charts/sensor/{id}/date-range/?pollutant=PM25
+GET /api/v1/charts/site/{site_id}/io-comparison/?pollutant=PM25
+GET /api/v1/charts/national/summary/</pre>
+          </div>
+
+        </div>
+      </section>
+
+      {# ── Sensor write endpoints ──────────────────────────────────────────── #}
+      <section id="sensor-write">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">
+          Sensor endpoints
+          <span class="ml-2 text-xs font-normal inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">SENSOR key</span>
+        </h2>
+
+        <div class="space-y-5">
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-1">Submit live reading</h3>
+            <p class="text-xs text-slate-500 mb-3">
+              Single timestamp from a live sensor. <code class="text-nao-red bg-red-50 px-1 rounded">serial_number</code> can be omitted when the key is bound to a specific sensor.
+            </p>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">POST /api/v1/readings/
+X-API-Key: &lt;sensor-key&gt;
+Content-Type: application/json
+
+{
+  "serial_number": "81432434001",
+  "timestamp": "2026-05-29T08:00:00Z",
+  "readings": [
+    {"pollutant": "PM25", "value": 45.2, "unit": "µg/m³"},
+    {"pollutant": "TEMP", "value": 18.5, "unit": "°C"}
+  ]
+}</pre>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-1">Submit batch readings (offline catch-up)</h3>
+            <p class="text-xs text-slate-500 mb-3">Up to 10,000 snapshots per request. Duplicate timestamps are silently skipped and counted in the response.</p>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">POST /api/v1/readings/batch/
+X-API-Key: &lt;sensor-key&gt;
+Content-Type: application/json
+
+{
+  "serial_number": "81432434001",
+  "readings": [
+    {
+      "timestamp": "2026-05-29T08:00:00Z",
+      "measurements": [{"pollutant": "PM25", "value": 45.2, "unit": "µg/m³"}]
+    },
+    {
+      "timestamp": "2026-05-29T08:01:00Z",
+      "measurements": [{"pollutant": "PM25", "value": 47.1, "unit": "µg/m³"}]
+    }
+  ]
+}</pre>
+            <p class="mt-2 text-xs text-slate-400">Response: <code class="text-nao-red bg-red-50 px-1 rounded">{ "snapshots": N, "saved": N, "duplicates": N, "errors": N }</code></p>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-1">Self-register a sensor</h3>
+            <p class="text-xs text-slate-500 mb-3">Idempotent — returns 200 if already registered, 201 if created.</p>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">POST /api/v1/sensors/register/
+X-API-Key: &lt;sensor-key&gt;
+Content-Type: application/json
+
+{
+  "serial_number": "81432434001",
+  "friendly_name": "Belauri Outdoor",
+  "model": "8143",
+  "site": 1,
+  "is_indoor": false,
+  "power_type": "SOLAR",
+  "connectivity_type": "WIFI"
+}</pre>
+          </div>
+
+        </div>
+      </section>
+
+      {# ── Researcher endpoints ────────────────────────────────────────────── #}
+      <section id="researcher">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">
+          Researcher endpoints
+          <span class="ml-2 text-xs font-normal inline-flex items-center px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">RESEARCHER key</span>
+        </h2>
+
+        <div class="space-y-5">
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Query readings</h3>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">GET /api/v1/readings/?sensor=1&amp;pollutant=PM25&amp;start=2026-01-01&amp;end=2026-04-01&amp;quality=GOOD</pre>
+            <div class="mt-3 overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead class="bg-slate-50">
+                  <tr>
+                    <th class="text-left px-3 py-2 text-slate-500 font-semibold">Param</th>
+                    <th class="text-left px-3 py-2 text-slate-500 font-semibold">Required</th>
+                    <th class="text-left px-3 py-2 text-slate-500 font-semibold">Description</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">sensor</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">Filter by sensor ID</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">pollutant</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">PM25, PM10, TEMP, RH, CO2, …</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">start / end</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">ISO 8601 datetime</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">quality</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">GOOD / SUSPECT / BAD / UNVALIDATED (default: all)</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">indoor</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600"><code>true</code> or <code>false</code></td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">page / page_size</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">Pagination; max page_size = 10,000</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Export readings (CSV / JSON)</h3>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">GET /api/v1/export/?sensors=1,2&amp;pollutants=PM25,PM10&amp;data_type=raw&amp;output=csv
+GET /api/v1/export/?sensors=1&amp;data_type=daily&amp;start=2026-01-01&amp;output=json</pre>
+            <div class="mt-3 overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead class="bg-slate-50">
+                  <tr>
+                    <th class="text-left px-3 py-2 text-slate-500 font-semibold">Param</th>
+                    <th class="text-left px-3 py-2 text-slate-500 font-semibold">Required</th>
+                    <th class="text-left px-3 py-2 text-slate-500 font-semibold">Description</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">sensors</td><td class="px-3 py-2 text-slate-500">Yes</td><td class="px-3 py-2 text-slate-600">Comma-separated sensor IDs, e.g. <code>1,2,3</code></td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">pollutants</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">Comma-separated codes (default: all)</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">data_type</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600"><code>raw</code> (default) / <code>hourly</code> / <code>daily</code></td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">start / end</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">ISO 8601 datetime — researcher+ only</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">quality</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">GOOD (default) / ALL / SUSPECT / BAD</td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">output</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600"><code>csv</code> (default) / <code>json</code></td></tr>
+                  <tr><td class="px-3 py-2 font-mono text-nao-red">columns</td><td class="px-3 py-2 text-slate-500">No</td><td class="px-3 py-2 text-slate-600">Comma-separated column names to include</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="mt-3 text-xs text-slate-400">
+              Row limits: public 500 · researcher 50,000 · admin 500,000.
+              Configurable in Django admin → Analysis → Download Configuration.
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      {# ── Admin endpoints ─────────────────────────────────────────────────── #}
+      <section id="admin">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">
+          Admin management endpoints
+          <span class="ml-2 text-xs font-normal inline-flex items-center px-2 py-0.5 rounded-full bg-red-50 text-red-700">ADMIN key only</span>
+        </h2>
+        <p class="text-sm text-slate-600 mb-5">
+          These endpoints are for programmatic provisioning of sensors and monitoring sites.
+          They require an <strong>ADMIN-role API key</strong> (or an admin browser session).
+          ADMIN keys must be issued by a Django superuser.
+        </p>
+
+        <div class="space-y-5">
+
+          {# Sites #}
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Monitoring sites (locations)</h3>
+
+            <div class="space-y-4">
+              <div>
+                <p class="text-xs font-medium text-slate-700 mb-1">Create a site</p>
+                <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">POST /api/v1/sites/
+X-API-Key: &lt;admin-key&gt;
+Content-Type: application/json
+
+{
+  "name": "Belauri",              // required, must be unique
+  "district": "Dadeldhura",       // required
+  "municipality": "Ajaymeru",
+  "province": "Sudurpashchim",
+  "latitude": 29.4931,            // required — WGS 84 decimal degrees
+  "longitude": 80.5741,           // required
+  "elevation_m": 1250,
+  "population_estimate": 4800,
+  "land_use_type": "RESIDENTIAL", // RESIDENTIAL|AGRICULTURAL|FOREST|URBAN|INDUSTRIAL|MIXED|OTHER
+  "description": "Near primary school."
+}</pre>
+                <p class="mt-1 text-xs text-slate-400">Returns <code class="text-nao-red bg-red-50 px-1 rounded">201 Created</code> with the full site object.</p>
+              </div>
+
+              <div>
+                <p class="text-xs font-medium text-slate-700 mb-1">Update / delete a site</p>
+                <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">PUT    /api/v1/sites/{id}/   # full replacement (all fields)
+PATCH  /api/v1/sites/{id}/   # partial update (only provided fields change)
+DELETE /api/v1/sites/{id}/   # 204 No Content; blocked if sensors are linked (409 Conflict)</pre>
+              </div>
+            </div>
+          </div>
+
+          {# Sensors #}
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Sensors</h3>
+
+            <div class="space-y-4">
+              <div>
+                <p class="text-xs font-medium text-slate-700 mb-1">Create a sensor</p>
+                <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">POST /api/v1/sensors/
+X-API-Key: &lt;admin-key&gt;
+Content-Type: application/json
+
+{
+  "serial_number": "81432434001",     // required, must be unique
+  "friendly_name": "Belauri Outdoor",
+  "model": "8143",
+  "manufacturer": "Particles Plus",
+  "site": 1,                          // required — Site ID
+  "is_indoor": false,
+  "power_type": "SOLAR",              // GRID|SOLAR|BATTERY|UNKNOWN
+  "connectivity_type": "WIFI",        // WIFI|CELLULAR|LORA|MANUAL|UNKNOWN
+  "status": "ACTIVE",                 // ACTIVE|OFFLINE|MAINTENANCE|DECOMMISSIONED
+  "installed_at": "2025-11-01T00:00:00Z",
+  "installation_notes": "",
+  "calibration_field_notes": ""
+}</pre>
+                <p class="mt-1 text-xs text-slate-400">Returns <code class="text-nao-red bg-red-50 px-1 rounded">201 Created</code>.</p>
+              </div>
+
+              <div>
+                <p class="text-xs font-medium text-slate-700 mb-1">Update a sensor</p>
+                <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">PUT    /api/v1/sensors/{id}/   # full replacement
+PATCH  /api/v1/sensors/{id}/   # partial update — e.g. {"status": "OFFLINE"}</pre>
+              </div>
+
+              <div>
+                <p class="text-xs font-medium text-slate-700 mb-1">Decommission / delete a sensor</p>
+                <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">DELETE /api/v1/sensors/{id}/            # soft — sets status=DECOMMISSIONED, preserves readings
+DELETE /api/v1/sensors/{id}/?hard=true  # hard — removes DB row (blocked if readings exist)</pre>
+                <div class="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <strong>Prefer soft-decommission.</strong>
+                  Hard delete will fail with a database error if any <code>CanonicalReading</code> rows reference the sensor (Django <code>PROTECT</code> constraint). This is intentional — it prevents accidental loss of historical data.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {# Aggregation #}
+          <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 class="text-sm font-semibold text-slate-800 mb-3">Trigger aggregation recompute</h3>
+            <p class="text-xs text-slate-500 mb-3">
+              Recalculates <code class="text-nao-red bg-red-50 px-1 rounded">HourlyAggregate</code> and <code class="text-nao-red bg-red-50 px-1 rounded">DailyAggregate</code> from raw readings.
+              Both fields are optional. Also available from <a href="{% url 'portal:aggregate' %}" class="text-nao-blue hover:underline">Portal → Aggregation</a>.
+            </p>
+            <pre class="bg-slate-900 text-green-400 rounded-lg p-3 text-xs overflow-x-auto">POST /api/v1/aggregate/
+X-API-Key: &lt;admin-key&gt;
+Content-Type: application/json
+
+{
+  "sensor_id": 1,          // omit to recompute all sensors
+  "since": "2026-01-01"    // omit to recompute everything
+}</pre>
+            <p class="mt-1 text-xs text-slate-400">Response: <code class="text-nao-red bg-red-50 px-1 rounded">{ "sensors_processed": N, "hourly_rows": N, "daily_rows": N, "errors": N }</code></p>
+          </div>
+
+        </div>
+      </section>
+
+      {# ── Pollutant codes ─────────────────────────────────────────────────── #}
+      <section id="pollutants">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Pollutant codes</h2>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Code</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Full name</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Typical unit</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Physical bounds</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {% for code, name, unit, bounds in pollutant_table %}
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-nao-red">{{ code }}</td>
+                <td class="px-4 py-2.5 text-slate-700">{{ name }}</td>
+                <td class="px-4 py-2.5 text-slate-500">{{ unit }}</td>
+                <td class="px-4 py-2.5 text-slate-400">{{ bounds }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {# ── Quality flags ───────────────────────────────────────────────────── #}
+      <section id="quality-flags">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Quality flags</h2>
+        <p class="text-sm text-slate-600 mb-4">
+          Raw values are <strong>never overwritten</strong>. QC corrections are written to <code class="text-nao-red bg-red-50 px-1 py-0.5 rounded text-xs">cleaned_value</code>.
+          Charts and exports use <code class="text-nao-red bg-red-50 px-1 py-0.5 rounded text-xs">cleaned_value ?? raw_value</code>.
+        </p>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Flag</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Badge</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Meaning</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">GOOD</td>
+                <td class="px-4 py-2.5"><span class="qf-good status-badge">Good</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Passes all automated QC checks</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">UNVALIDATED</td>
+                <td class="px-4 py-2.5"><span class="qf-unvalidated status-badge">Unvalidated</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Not yet checked — default for new readings</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">SUSPECT</td>
+                <td class="px-4 py-2.5"><span class="qf-suspect status-badge">Suspect</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Passes range check but flagged by anomaly detector</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">BAD</td>
+                <td class="px-4 py-2.5"><span class="qf-bad status-badge">Bad</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Fails physical bounds or confirmed outlier</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">MISSING</td>
+                <td class="px-4 py-2.5"><span class="qf-missing status-badge">Missing</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Expected timestamp with no measurement</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {# ── Sensor status ───────────────────────────────────────────────────── #}
+      <section id="sensor-status">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Sensor status values</h2>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Status</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Badge</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Meaning</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">ACTIVE</td>
+                <td class="px-4 py-2.5"><span class="status-active status-badge">Active</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Collecting and transmitting data</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">OFFLINE</td>
+                <td class="px-4 py-2.5"><span class="status-offline status-badge">Offline</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Not sending data; cause unknown</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">MAINTENANCE</td>
+                <td class="px-4 py-2.5"><span class="status-maintenance status-badge">Maintenance</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Under servicing; data may be unreliable</td>
+              </tr>
+              <tr class="hover:bg-slate-50">
+                <td class="px-4 py-2.5 font-mono text-slate-700">DECOMMISSIONED</td>
+                <td class="px-4 py-2.5"><span class="status-decommissioned status-badge">Decommissioned</span></td>
+                <td class="px-4 py-2.5 text-slate-600">Retired; historical readings preserved</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {# ── Error responses ─────────────────────────────────────────────────── #}
+      <section id="errors">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Error responses</h2>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">HTTP status</th>
+                <th class="text-left px-4 py-3 font-semibold text-slate-500">Meaning</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="hover:bg-slate-50"><td class="px-4 py-2.5 font-mono text-slate-700">400 Bad Request</td><td class="px-4 py-2.5 text-slate-600">Missing required field or invalid value in request body</td></tr>
+              <tr class="hover:bg-slate-50"><td class="px-4 py-2.5 font-mono text-slate-700">401 Unauthorized</td><td class="px-4 py-2.5 text-slate-600">No API key or session provided</td></tr>
+              <tr class="hover:bg-slate-50"><td class="px-4 py-2.5 font-mono text-slate-700">403 Forbidden</td><td class="px-4 py-2.5 text-slate-600">Key provided but insufficient privilege level for this endpoint</td></tr>
+              <tr class="hover:bg-slate-50"><td class="px-4 py-2.5 font-mono text-slate-700">404 Not Found</td><td class="px-4 py-2.5 text-slate-600">Sensor or site ID does not exist</td></tr>
+              <tr class="hover:bg-slate-50"><td class="px-4 py-2.5 font-mono text-slate-700">409 Conflict</td><td class="px-4 py-2.5 text-slate-600">Cannot delete site — sensors still linked; or hard-delete blocked by readings</td></tr>
+              <tr class="hover:bg-slate-50"><td class="px-4 py-2.5 font-mono text-slate-700">422 Unprocessable Entity</td><td class="px-4 py-2.5 text-slate-600">Valid JSON but ingestion logic rejected it (e.g. unknown sensor serial)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {# ── Python example ──────────────────────────────────────────────────── #}
+      <section id="python">
+        <h2 class="text-lg font-semibold text-slate-900 border-b border-slate-200 pb-2 mb-4">Python example</h2>
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+          <pre class="bg-slate-900 text-green-400 rounded-lg p-4 text-xs overflow-x-auto">import requests
+
+BASE = "https://your-domain"
+HEADERS = {"X-API-Key": "your-admin-key-here"}
+
+# ── Create a monitoring site ──────────────────────────────────────────────────
+site = requests.post(f"{BASE}/api/v1/sites/", headers=HEADERS, json={
+    "name": "Kathmandu Central",
+    "district": "Kathmandu",
+    "municipality": "Kathmandu Metropolitan",
+    "latitude": 27.7172,
+    "longitude": 85.3240,
+    "land_use_type": "URBAN",
+}).json()
+print(f"Site created: id={site['id']}")
+
+# ── Create a sensor at that site ──────────────────────────────────────────────
+sensor = requests.post(f"{BASE}/api/v1/sensors/", headers=HEADERS, json={
+    "serial_number": "99999999001",
+    "friendly_name": "KTM Outdoor",
+    "model": "8143",
+    "site": site["id"],
+    "is_indoor": False,
+    "power_type": "GRID",
+    "connectivity_type": "WIFI",
+    "status": "ACTIVE",
+}).json()
+print(f"Sensor created: id={sensor['id']}")
+
+# ── Update sensor status to OFFLINE ──────────────────────────────────────────
+requests.patch(
+    f"{BASE}/api/v1/sensors/{sensor['id']}/",
+    headers=HEADERS,
+    json={"status": "OFFLINE"},
+)
+
+# ── Export PM2.5 data for the sensor ─────────────────────────────────────────
+resp = requests.get(
+    f"{BASE}/api/v1/export/",
+    params={"sensors": sensor["id"], "pollutants": "PM25",
+            "quality": "GOOD", "start": "2026-01-01", "output": "csv"},
+    headers=HEADERS,
+)
+with open("pm25.csv", "wb") as f:
+    f.write(resp.content)
+print(f"Downloaded {len(resp.content):,} bytes")</pre>
+        </div>
+      </section>
+
+    </div>{# end main content #}
+  </div>{# end flex #}
+
+</div>
+{% endblock %}

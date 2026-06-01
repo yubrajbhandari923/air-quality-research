@@ -1,19 +1,38 @@
 """
 API views for the Nepal Air Quality Dashboard.
 
+Privilege levels (least → most):
+  public          — no auth required (read-only)
+  sensor key      — SENSOR or ADMIN API key
+  researcher      — RESEARCHER/ADMIN API key or researcher+ session user
+  maintainer      — ADMIN API key or maintainer/admin session user
+  admin           — ADMIN API key or admin session user (management endpoints)
+
 Endpoints:
-  POST /api/v1/readings/             — submit single-timestamp readings (sensor API key)
-  POST /api/v1/readings/batch/       — submit multiple timestamps (offline catch-up)
-  GET  /api/v1/readings/             — query readings (researcher+ auth)
-  POST /api/v1/aggregate/            — trigger hourly/daily aggregation (maintainer/admin)
+  POST /api/v1/readings/             — submit single-timestamp readings (sensor key)
+  POST /api/v1/readings/batch/       — submit multiple timestamps (sensor key)
+  GET  /api/v1/readings/             — query readings (researcher+)
+  POST /api/v1/aggregate/            — trigger aggregation (maintainer+)
   GET  /api/v1/export/               — CSV/JSON export with access-level controls
+
   GET  /api/v1/sensors/              — list sensors (public)
-  GET  /api/v1/sensors/{id}/         — sensor detail (public)
-  POST /api/v1/sensors/register/     — register new sensor (sensor API key)
+  POST /api/v1/sensors/              — create sensor (admin)
+  GET  /api/v1/sensors/{id}/         — sensor detail + recent stats (public)
+  PUT  /api/v1/sensors/{id}/         — full update sensor (admin)
+  PATCH /api/v1/sensors/{id}/        — partial update sensor (admin)
+  DELETE /api/v1/sensors/{id}/       — decommission sensor (admin); ?hard=true to hard-delete
+  POST /api/v1/sensors/register/     — self-register sensor (sensor key)
+
   GET  /api/v1/sites/                — list sites (public)
-  GET  /api/v1/charts/sensor/{id}/timeseries/   — chart data
-  GET  /api/v1/charts/sensor/{id}/completeness/ — completeness chart data
-  GET  /api/v1/charts/national/summary/         — national summary chart
+  POST /api/v1/sites/                — create site/location (admin)
+  GET  /api/v1/sites/{id}/           — site detail (public)
+  PUT  /api/v1/sites/{id}/           — full update site (admin)
+  PATCH /api/v1/sites/{id}/          — partial update site (admin)
+  DELETE /api/v1/sites/{id}/         — delete site (admin, only if no linked sensors)
+
+  GET  /api/v1/charts/sensor/{id}/timeseries/   — time series chart (public)
+  GET  /api/v1/charts/sensor/{id}/completeness/ — completeness chart (public)
+  GET  /api/v1/charts/national/summary/         — national summary chart (public)
 """
 import csv
 import io
@@ -33,14 +52,16 @@ from apps.ingestion.converters.api_converter import APIConverter
 from apps.readings.models import CanonicalReading
 from apps.sensors.models import Sensor, Site
 
-from .permissions import HasResearcherPermission, HasSensorWritePermission, IsMaintainerOrAdmin
+from .permissions import HasResearcherPermission, HasSensorWritePermission, IsAdminAPIKey, IsMaintainerOrAdmin
 from .serializers import (
     BatchReadingSubmitSerializer,
     CanonicalReadingSerializer,
     ReadingSubmitSerializer,
     SensorRegisterSerializer,
     SensorSerializer,
+    SensorWriteSerializer,
     SiteSerializer,
+    SiteWriteSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -478,9 +499,15 @@ class AggregationTriggerView(APIView):
 # ── Sensors ───────────────────────────────────────────────────────────────────
 
 class SensorListView(APIView):
-    """GET /api/v1/sensors/ — list all sensors (public)."""
+    """
+    GET  /api/v1/sensors/ — list all sensors (public)
+    POST /api/v1/sensors/ — create a new sensor (admin)
+    """
 
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAdminAPIKey()]
+        return [AllowAny()]
 
     def get(self, request):
         qs = Sensor.objects.select_related("site").order_by("site__name", "serial_number")
@@ -496,16 +523,36 @@ class SensorListView(APIView):
         serializer = SensorSerializer(qs, many=True)
         return Response(serializer.data)
 
+    def post(self, request):
+        serializer = SensorWriteSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        sensor = serializer.save()
+        return Response(SensorSerializer(sensor).data, status=status.HTTP_201_CREATED)
+
 
 class SensorDetailView(APIView):
-    """GET /api/v1/sensors/{id}/ — sensor detail + recent stats."""
+    """
+    GET    /api/v1/sensors/{id}/ — sensor detail + recent PM2.5 stats (public)
+    PUT    /api/v1/sensors/{id}/ — full update (admin)
+    PATCH  /api/v1/sensors/{id}/ — partial update (admin)
+    DELETE /api/v1/sensors/{id}/ — soft-decommission (admin); ?hard=true to hard-delete
+    """
 
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method in ("PUT", "PATCH", "DELETE"):
+            return [IsAdminAPIKey()]
+        return [AllowAny()]
+
+    def _get_sensor(self, pk):
+        try:
+            return Sensor.objects.select_related("site").get(pk=pk)
+        except Sensor.DoesNotExist:
+            return None
 
     def get(self, request, pk):
-        try:
-            sensor = Sensor.objects.select_related("site").get(pk=pk)
-        except Sensor.DoesNotExist:
+        sensor = self._get_sensor(pk)
+        if sensor is None:
             return Response({"error": "Sensor not found."}, status=404)
 
         data = SensorSerializer(sensor).data
@@ -525,6 +572,39 @@ class SensorDetailView(APIView):
         data["recent_pm25_7d"] = recent
 
         return Response(data)
+
+    def put(self, request, pk):
+        sensor = self._get_sensor(pk)
+        if sensor is None:
+            return Response({"error": "Sensor not found."}, status=404)
+        serializer = SensorWriteSerializer(sensor, data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        sensor = serializer.save()
+        return Response(SensorSerializer(sensor).data)
+
+    def patch(self, request, pk):
+        sensor = self._get_sensor(pk)
+        if sensor is None:
+            return Response({"error": "Sensor not found."}, status=404)
+        serializer = SensorWriteSerializer(sensor, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        sensor = serializer.save()
+        return Response(SensorSerializer(sensor).data)
+
+    def delete(self, request, pk):
+        sensor = self._get_sensor(pk)
+        if sensor is None:
+            return Response({"error": "Sensor not found."}, status=404)
+        if request.query_params.get("hard", "").lower() == "true":
+            sensor.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        # Default: soft-decommission (preserves historical readings)
+        sensor.status = Sensor.Status.DECOMMISSIONED
+        sensor.decommissioned_at = timezone.now()
+        sensor.save(update_fields=["status", "decommissioned_at"])
+        return Response(SensorSerializer(sensor).data)
 
 
 class SensorRegisterView(APIView):
@@ -557,14 +637,86 @@ class SensorRegisterView(APIView):
 # ── Sites ─────────────────────────────────────────────────────────────────────
 
 class SiteListView(APIView):
-    """GET /api/v1/sites/ — list all monitoring sites."""
+    """
+    GET  /api/v1/sites/ — list all monitoring sites (public)
+    POST /api/v1/sites/ — create a new monitoring site (admin)
+    """
 
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAdminAPIKey()]
+        return [AllowAny()]
 
     def get(self, request):
         sites = Site.objects.all().order_by("name")
         serializer = SiteSerializer(sites, many=True)
         return Response(serializer.data)
+
+    def post(self, request):
+        serializer = SiteWriteSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        site = serializer.save()
+        return Response(SiteSerializer(site).data, status=status.HTTP_201_CREATED)
+
+
+class SiteDetailView(APIView):
+    """
+    GET    /api/v1/sites/{id}/ — site detail (public)
+    PUT    /api/v1/sites/{id}/ — full update (admin)
+    PATCH  /api/v1/sites/{id}/ — partial update (admin)
+    DELETE /api/v1/sites/{id}/ — delete site (admin; only if no sensors linked)
+    """
+
+    def get_permissions(self):
+        if self.request.method in ("PUT", "PATCH", "DELETE"):
+            return [IsAdminAPIKey()]
+        return [AllowAny()]
+
+    def _get_site(self, pk):
+        try:
+            return Site.objects.get(pk=pk)
+        except Site.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        site = self._get_site(pk)
+        if site is None:
+            return Response({"error": "Site not found."}, status=404)
+        return Response(SiteSerializer(site).data)
+
+    def put(self, request, pk):
+        site = self._get_site(pk)
+        if site is None:
+            return Response({"error": "Site not found."}, status=404)
+        serializer = SiteWriteSerializer(site, data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        site = serializer.save()
+        return Response(SiteSerializer(site).data)
+
+    def patch(self, request, pk):
+        site = self._get_site(pk)
+        if site is None:
+            return Response({"error": "Site not found."}, status=404)
+        serializer = SiteWriteSerializer(site, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        site = serializer.save()
+        return Response(SiteSerializer(site).data)
+
+    def delete(self, request, pk):
+        site = self._get_site(pk)
+        if site is None:
+            return Response({"error": "Site not found."}, status=404)
+        if site.sensors.exists():
+            return Response(
+                {"error": "Cannot delete a site that has linked sensors. "
+                          "Decommission or relocate all sensors first."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        site.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ── Chart data ────────────────────────────────────────────────────────────────

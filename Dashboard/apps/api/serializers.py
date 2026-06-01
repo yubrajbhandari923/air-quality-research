@@ -40,6 +40,31 @@ class SensorRegisterSerializer(serializers.ModelSerializer):
         ]
 
 
+class SiteWriteSerializer(serializers.ModelSerializer):
+    """Full write serializer for admin-created/updated monitoring sites."""
+
+    class Meta:
+        model = Site
+        fields = [
+            "name", "district", "municipality", "province",
+            "latitude", "longitude", "elevation_m",
+            "population_estimate", "land_use_type", "description",
+        ]
+
+
+class SensorWriteSerializer(serializers.ModelSerializer):
+    """Full write serializer for admin-created/updated sensors."""
+
+    class Meta:
+        model = Sensor
+        fields = [
+            "serial_number", "friendly_name", "model", "manufacturer",
+            "site", "is_indoor", "power_type", "connectivity_type", "status",
+            "installed_at", "decommissioned_at",
+            "installation_notes", "calibration_field_notes",
+        ]
+
+
 class CanonicalReadingSerializer(serializers.ModelSerializer):
     sensor_serial = serializers.CharField(source="sensor.serial_number", read_only=True)
     site_name = serializers.CharField(source="site.name", read_only=True)

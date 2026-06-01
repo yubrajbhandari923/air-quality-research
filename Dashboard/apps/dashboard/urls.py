@@ -26,6 +26,7 @@ observatory_patterns = [
 # ── Portal namespace ──────────────────────────────────────────────────────────
 portal_patterns = [
     path("",                              views.PortalIndexView.as_view(),              name="index"),
+    path("docs/",                         views.DeveloperDocsView.as_view(),            name="developer_docs"),
     path("ingestion-logs/",               views.IngestionLogsView.as_view(),            name="ingestion_logs"),
     path("upload-csv/",                   views.UploadCSVView.as_view(),                name="upload_csv"),
     path("api-keys/",                     views.APIKeysView.as_view(),                  name="api_keys"),

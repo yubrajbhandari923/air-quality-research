@@ -70,12 +70,12 @@ services:
       - key: AQ_R2_PARTITION_BY
         value: "month"
 
-  # ── Cron 1: process queued CSV uploads (every minute) ──────────────────────
+  # ── Cron 1: process queued CSV uploads (hourly) ─────────────────────────────
   - type: cron
     name: nepal-aq-process-uploads
     runtime: python
     plan: starter
-    schedule: "* * * * *"
+    schedule: "0 * * * *"
 
     buildCommand: |
       cd Dashboard
@@ -112,12 +112,12 @@ services:
       - key: R2_BUCKET_NAME
         value: nepal-aq
 
-  # ── Cron 2: aggregate raw readings (every 10 minutes) ──────────────────────
+  # ── Cron 2: aggregate raw readings (daily at 03:00 UTC) ─────────────────────
   - type: cron
     name: nepal-aq-aggregate
     runtime: python
     plan: starter
-    schedule: "*/10 * * * *"
+    schedule: "0 3 * * *"
 
     buildCommand: |
       cd Dashboard

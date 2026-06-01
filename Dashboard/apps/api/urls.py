@@ -18,13 +18,14 @@ urlpatterns = [
     # CSV/JSON export (access-level controlled)
     path("export/", views.ExportReadingsView.as_view(), name="export"),
 
-    # Sensors
+    # Sensors — list/create (register must come before <int:pk> to avoid capture)
+    path("sensors/register/", views.SensorRegisterView.as_view(), name="sensor_register"),
     path("sensors/", views.SensorListView.as_view(), name="sensor_list"),
     path("sensors/<int:pk>/", views.SensorDetailView.as_view(), name="sensor_detail"),
-    path("sensors/register/", views.SensorRegisterView.as_view(), name="sensor_register"),
 
-    # Sites
+    # Sites — list/create + detail
     path("sites/", views.SiteListView.as_view(), name="site_list"),
+    path("sites/<int:pk>/", views.SiteDetailView.as_view(), name="site_detail"),
 
     # Charts — sensor
     path("charts/sensor/<int:sensor_id>/timeseries/",   views.TimeSeriesChartView.as_view(),  name="chart_timeseries"),

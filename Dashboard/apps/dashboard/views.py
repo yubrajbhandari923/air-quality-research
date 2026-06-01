@@ -1066,6 +1066,39 @@ class AggregationView(PortalRequiredMixin, View):
         return render(request, self.template_name, ctx)
 
 
+class DeveloperDocsView(PortalRequiredMixin, TemplateView):
+    """GET /portal/docs/ — in-portal API + developer reference."""
+
+    template_name = "portal/developer_docs.html"
+
+    _POLLUTANT_TABLE = [
+        ("PM1",   "PM₁.₀",              "µg/m³",  "0 – 500"),
+        ("PM25",  "PM₂.₅",              "µg/m³",  "0 – 500"),
+        ("PM4",   "PM₄.₀",              "µg/m³",  "0 – 600"),
+        ("PM10",  "PM₁₀",               "µg/m³",  "0 – 700"),
+        ("CO2",   "Carbon dioxide",      "ppm",    "200 – 6000"),
+        ("CO",    "Carbon monoxide",     "ppm",    "0 – 100"),
+        ("SO2",   "Sulfur dioxide",      "µg/m³",  "0 – 2000"),
+        ("O3",    "Ozone",               "µg/m³",  "0 – 600"),
+        ("NO2",   "Nitrogen dioxide",    "µg/m³",  "0 – 2000"),
+        ("CH2O",  "Formaldehyde",        "ppm",    "0 – 5"),
+        ("TVOC",  "Total VOC",           "ppm",    "0 – 15"),
+        ("TEMP",  "Temperature",         "°C",     "−20 – 60"),
+        ("RH",    "Relative humidity",   "%",      "0 – 100"),
+        ("BARO",  "Barometric pressure", "inHg",   "25 – 32"),
+        ("NC05",  "PM₀.₅ number conc.",  "#/cm³",  "—"),
+        ("NC1",   "PM₁.₀ number conc.",  "#/cm³",  "—"),
+        ("NC25",  "PM₂.₅ number conc.",  "#/cm³",  "—"),
+        ("NC4",   "PM₄.₀ number conc.",  "#/cm³",  "—"),
+        ("NC10",  "PM₁₀ number conc.",   "#/cm³",  "—"),
+    ]
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["pollutant_table"] = self._POLLUTANT_TABLE
+        return ctx
+
+
 class RunIngestionView(PortalRequiredMixin, TemplateView):
     template_name = "portal/run_ingestion.html"
     allowed_roles = ("MAINTAINER", "ADMIN")
